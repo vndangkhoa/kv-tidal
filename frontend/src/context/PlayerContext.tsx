@@ -314,13 +314,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [volume, setVolumeState] = useState<number>(0.85);
 
   // Audio stream quality mode: "flac" (Bit-Perfect Lossless) vs "opus" (Fast Web Stream 160kbps)
-  const [streamQuality, setStreamQualityState] = useState<"flac" | "opus">("flac");
+  const [streamQuality, setStreamQualityState] = useState<"flac" | "opus">("opus");
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem("kv_stream_quality");
       if (saved === "opus" || saved === "flac") {
         setStreamQualityState(saved);
+      } else {
+        setStreamQualityState("opus");
       }
     } catch (_) {}
   }, []);

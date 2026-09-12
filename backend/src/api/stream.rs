@@ -93,8 +93,10 @@ async fn handle_stream(
         .as_deref()
         .map(|f| f.eq_ignore_ascii_case("opus"))
         .unwrap_or(false);
+    let is_explicit_local = query.path.is_some()
+        || query.id.as_deref().map(|id| id.starts_with('/')).unwrap_or(false);
 
-    if !force_opus {
+    if !force_opus || is_explicit_local {
         // 1. Check if track already exists in local NAS library (by path, ID, or artist & title)
         let mut local_track = {
             let lib = state.library.read().await;

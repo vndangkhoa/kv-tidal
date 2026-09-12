@@ -73,6 +73,7 @@ export function AudioPlayer() {
   const [isLiked, setIsLiked] = useState(false);
   const [isFullscreenPlayerOpen, setIsFullscreenPlayerOpen] = useState(false);
   const [isArtworkModalOpen, setIsArtworkModalOpen] = useState(false);
+  const [isStudioToolsOpen, setIsStudioToolsOpen] = useState(false);
   const [timeMode, setTimeMode] = useState<"elapsed" | "remaining" | "frames">("elapsed");
 
   const { downloadTrack, getTrackDownloadStatus, setIsManagerOpen } = useDownloads();
@@ -130,6 +131,35 @@ export function AudioPlayer() {
   const isTidalMaster = currentTrack.source === "tidal-direct-hifi";
   const isSoulseek = currentTrack.source === "soulseek-lossless";
   const isWebOpus = currentTrack.source === "web-stream-opus" || (!isLocal && !isTidalMaster && !isSoulseek && !currentTrack.isDsd);
+
+  // Switch quality with automatic Soulseek FLAC download trigger & smooth playback
+  const handleQualitySwitch = async (targetQuality: "flac" | "opus") => {
+    if (targetQuality === "opus") {
+      switchStreamQuality("opus");
+      return;
+    }
+
+    const hasFlac = isLocal || downloadStatus.isDone || isTidalMaster;
+    if (hasFlac) {
+      switchStreamQuality("flac");
+    } else {
+      if (downloadStatus.isDownloading) {
+        setIsManagerOpen(true);
+        return;
+      }
+      if (currentTrack) {
+        await downloadTrack({
+          title: currentTrack.title,
+          artist: currentTrack.artist,
+          album: currentTrack.album,
+          stream_url: currentTrack.streamUrl,
+          cover_url: currentTrack.coverUrl,
+          track_id: currentTrack.id,
+          source: currentTrack.source || "tidal",
+        });
+      }
+    }
+  };
 
   const bitDepth = currentTrack.bitDepth || (isWebOpus ? 16 : currentTrack.hires ? 24 : 16);
   const sampleRateKhz = currentTrack.sampleRate
@@ -335,96 +365,169 @@ export function AudioPlayer() {
           </div>
         </div>
 
-        {/* Right Zone: Audiophile MAX Badge, Tools & Padlocked Bit-Perfect Volume */}
-        <div className="flex items-center justify-end space-x-2 w-1/4">
-          {/* Instant Seamless Audio Quality Switcher (FLAC vs OPUS) */}
-          <div className="flex items-center bg-card/80 border border-border/80 rounded-lg p-0.5 text-[10px] font-mono font-bold select-none">
+        {/* Right Zone: Stream Quality Capsule, Studio Suite & Volume */}
+        <div className="flex items-center justify-end space-x-2.5 w-1/4 min-w-[280px]">
+          {/* Unified Stream Quality Capsule (FLAC / OPUS + Signal Chain) */}
+          <div className="flex items-center bg-card/90 border border-border/80 rounded-full p-0.5 text-[10px] font-mono select-none shadow-sm">
+            {/* FLAC Option */}
             <button
-              onClick={() => switchStreamQuality("flac")}
-              title={downloadStatus.isDone ? "FLAC Master is downloaded & ready on NAS! Click to switch" : "Switch instantly to FLAC (Bit-Perfect Lossless Master)"}
-              className={`px-1.5 py-0.5 rounded transition-all cursor-pointer flex items-center space-x-1 ${
+              onClick={() => handleQualitySwitch("flac")}
+              title={
+                downloadStatus.isDownloading
+                  ? `Soulseek P2P Download in progress (${downloadStatus.progress}%). Playing Opus smoothly until FLAC is ready.`
+                  : downloadStatus.isDone || isLocal
+                  ? "Bit-Perfect Lossless FLAC Master. Click to play."
+                  : "Switch to FLAC — will automatically download lossless studio FLAC via Soulseek & play seamlessly"
+              }
+              className={`px-2.5 py-0.5 rounded-full transition-all cursor-pointer flex items-center space-x-1 font-bold ${
                 streamQuality === "flac"
-                  ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 shadow-sm"
+                  ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/50 shadow-[0_0_8px_rgba(0,255,255,0.3)]"
+                  : downloadStatus.isDownloading
+                  ? "bg-cyan-950/60 text-cyan-300 border border-cyan-500/40 animate-pulse"
                   : downloadStatus.isDone
-                  ? "text-emerald-400 hover:text-white border border-emerald-500/50 bg-emerald-500/10 animate-pulse"
+                  ? "text-emerald-400 hover:text-white"
                   : "text-textSecondary hover:text-white"
               }`}
             >
-              {downloadStatus.isDone && streamQuality === "opus" && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-0.5" />
+              {downloadStatus.isDownloading ? (
+                <>
+                  <Loader2 className="w-2.5 h-2.5 animate-spin text-cyan-400" />
+                  <span>{downloadStatus.progress > 0 ? `${downloadStatus.progress}%` : "FLAC"}</span>
+                </>
+              ) : (
+                <>
+                  {streamQuality === "flac" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_#00ffff]" />
+                  )}
+                  {downloadStatus.isDone && streamQuality !== "flac" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  )}
+                  <span>FLAC</span>
+                </>
               )}
-              <span>FLAC</span>
             </button>
+
+            {/* OPUS Option */}
             <button
-              onClick={() => switchStreamQuality("opus")}
-              title="Switch instantly to OPUS (Fast 160kbps Web Stream)"
-              className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+              onClick={() => handleQualitySwitch("opus")}
+              title="Switch to OPUS (Fast 160kbps Web Stream for instant playback)"
+              className={`px-2.5 py-0.5 rounded-full transition-all cursor-pointer font-bold ${
                 streamQuality === "opus"
-                  ? "bg-amber-500/25 text-amber-300 border border-amber-500/40 shadow-sm"
+                  ? "bg-amber-500/25 text-amber-300 border border-amber-500/50 shadow-[0_0_8px_rgba(245,158,11,0.25)]"
                   : "text-textSecondary hover:text-white"
               }`}
             >
               OPUS
             </button>
-          </div>
 
-          {/* Transparent Audiophile Quality Badge Pill */}
-          <button
-            onClick={() => setIsSignalPathOpen(true)}
-            title={`Inspect Signal Path (${sourceLabel})`}
-            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-all hover:scale-105 cursor-pointer flex items-center space-x-1 ${
-              isLocal
-                ? "border border-cyan-400/60 bg-cyan-500/15 text-cyan-300 shadow-[0_0_10px_rgba(0,255,255,0.2)]"
-                : isTidalMaster
-                ? "border border-amber-400/60 bg-amber-500/15 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
-                : isSoulseek
-                ? "border border-purple-400/60 bg-purple-500/15 text-purple-300 shadow-[0_0_10px_rgba(168,85,247,0.2)]"
-                : "border border-amber-500/40 bg-amber-500/10 text-amber-400"
-            }`}
-          >
-            <span>
-              {isLocal
-                ? "LOCAL BIT-PERFECT"
-                : isTidalMaster
-                ? "TIDAL MASTER"
-                : isSoulseek
-                ? "SOULSEEK FLAC"
-                : "WEB OPUS"}
-            </span>
-          </button>
-
-          {/* Audiophile DR Score Badge */}
-          {currentTrack.drScore && (
+            {/* Hardware Signal Path Inspector Trigger */}
             <button
               onClick={() => setIsSignalPathOpen(true)}
-              title={`Dynamic Range: DR${currentTrack.drScore} (Crest Factor Rating)`}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold cursor-pointer transition-all hover:scale-105 ${
-                currentTrack.drScore >= 12
-                  ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
-                  : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+              title={`Inspect Bit-Perfect Hardware Signal Chain (${sourceLabel})`}
+              className="px-1.5 py-0.5 text-textSecondary hover:text-primary transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* Studio Audio Suite (EQ, Spectrum Visualizer, VU Meters) */}
+          <div className="relative">
+            <button
+              onClick={() => setIsStudioToolsOpen(!isStudioToolsOpen)}
+              title="Studio Audio Suite (Parametric EQ, Spectrum Visualizer, Analog VU Meters)"
+              className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                isStudioToolsOpen
+                  ? "bg-primary/20 text-primary border border-primary/40 shadow-sm"
+                  : "hover:bg-card text-textSecondary hover:text-white"
               }`}
             >
-              DR{currentTrack.drScore}
+              <Sliders className="w-4 h-4" />
             </button>
-          )}
 
-          {/* Analog Ballistic VU Meter Button */}
-          <button
-            onClick={() => setIsVuMeterOpen(true)}
-            title="Analog Ballistic VU Meters (Accuphase / McIntosh / Nagra)"
-            className="p-1.5 rounded hover:bg-card text-textSecondary hover:text-amber-400 transition-colors cursor-pointer"
-          >
-            <Gauge className="w-4 h-4" />
-          </button>
+            {isStudioToolsOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsStudioToolsOpen(false)}
+                />
+                <div className="absolute bottom-11 right-0 w-60 bg-surface/98 backdrop-blur-xl border border-border rounded-xl p-2 shadow-2xl z-50 space-y-1 animate-in fade-in zoom-in-95 duration-150 select-none">
+                  <div className="px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary border-b border-border/60 flex items-center justify-between">
+                    <span>Studio Audio Suite</span>
+                    <span className="text-primary text-[9px]">DSP & Meters</span>
+                  </div>
 
-          {/* Audiophile Output Device Selector Popover */}
-          <DevicePickerPopover />
+                  {/* 1. Equalizer */}
+                  <button
+                    onClick={() => {
+                      setIsEqOpen(true);
+                      setIsStudioToolsOpen(false);
+                    }}
+                    className="w-full flex items-center space-x-2.5 px-2.5 py-2 rounded-lg hover:bg-card text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="w-7 h-7 rounded-md bg-purple-500/15 text-purple-400 flex items-center justify-center border border-purple-500/30 flex-shrink-0">
+                      <Sliders className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold text-white group-hover:text-primary transition-colors">
+                        Parametric Equalizer
+                      </div>
+                      <div className="text-[10px] text-textSecondary truncate">
+                        10-band studio EQ & AutoEQ
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* 2. Spectrum Analyzer */}
+                  <button
+                    onClick={() => {
+                      setIsVisualizerOpen(true);
+                      setIsStudioToolsOpen(false);
+                    }}
+                    className="w-full flex items-center space-x-2.5 px-2.5 py-2 rounded-lg hover:bg-card text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="w-7 h-7 rounded-md bg-cyan-500/15 text-cyan-400 flex items-center justify-center border border-cyan-500/30 flex-shrink-0">
+                      <Activity className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold text-white group-hover:text-cyan-300 transition-colors">
+                        Spectrum Analyzer
+                      </div>
+                      <div className="text-[10px] text-textSecondary truncate">
+                        Real-time FFT audio visualizer
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* 3. Ballistic VU Meters */}
+                  <button
+                    onClick={() => {
+                      setIsVuMeterOpen(true);
+                      setIsStudioToolsOpen(false);
+                    }}
+                    className="w-full flex items-center space-x-2.5 px-2.5 py-2 rounded-lg hover:bg-card text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="w-7 h-7 rounded-md bg-amber-500/15 text-amber-400 flex items-center justify-center border border-amber-500/30 flex-shrink-0">
+                      <Gauge className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold text-white group-hover:text-amber-300 transition-colors">
+                        Ballistic VU Meters
+                      </div>
+                      <div className="text-[10px] text-textSecondary truncate">
+                        Accuphase / McIntosh needles
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
 
           {/* Karaoke Lyrics Toggle */}
           <button
             onClick={() => setIsLyricsOpen(!isLyricsOpen)}
             title="Karaoke Synced Lyrics"
-            className={`p-1.5 rounded hover:bg-card transition-colors cursor-pointer ${
+            className={`p-1.5 rounded-lg hover:bg-card transition-colors cursor-pointer ${
               isLyricsOpen ? "text-primary bg-primary/15" : "text-textSecondary hover:text-white"
             }`}
           >
@@ -435,7 +538,7 @@ export function AudioPlayer() {
           <button
             onClick={() => setIsQueueOpen(!isQueueOpen)}
             title="Queue & Up Next"
-            className={`p-1.5 rounded hover:bg-card transition-colors relative cursor-pointer ${
+            className={`p-1.5 rounded-lg hover:bg-card transition-colors relative cursor-pointer ${
               isQueueOpen ? "text-primary bg-primary/15" : "text-textSecondary hover:text-white"
             }`}
           >
@@ -445,27 +548,8 @@ export function AudioPlayer() {
             )}
           </button>
 
-          {/* Visualizer Toggle */}
-          <button
-            onClick={() => setIsVisualizerOpen(true)}
-            title="Stereo Spectrum & Peak VU Meter"
-            className="p-1.5 rounded hover:bg-card text-textSecondary hover:text-accent transition-colors cursor-pointer"
-          >
-            <Activity className="w-4 h-4" />
-          </button>
-
-          {/* 10-Band EQ Toggle */}
-          <button
-            onClick={() => setIsEqOpen(true)}
-            title="Studio Parametric Equalizer & AutoEQ"
-            className={`p-1.5 rounded hover:bg-card transition-colors cursor-pointer ${
-              bitPerfectMode
-                ? "text-emerald-400 bg-emerald-500/10"
-                : "text-purple-400 bg-purple-500/10"
-            }`}
-          >
-            <Sliders className="w-4 h-4" />
-          </button>
+          {/* Audiophile Output Device Selector Popover */}
+          <DevicePickerPopover />
 
           {/* Padlocked Bit-Perfect Volume Control */}
           <div className="flex items-center space-x-1.5 pl-2 border-l border-border/80">
@@ -688,22 +772,33 @@ export function AudioPlayer() {
                 </span>
                 <div className="flex items-center bg-card border border-border rounded-lg p-0.5 text-[9px] font-mono font-bold">
                   <button
-                    onClick={() => switchStreamQuality("flac")}
+                    onClick={() => handleQualitySwitch("flac")}
                     className={`px-1.5 py-0.5 rounded transition-all cursor-pointer flex items-center space-x-1 ${
                       streamQuality === "flac"
                         ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/40"
+                        : downloadStatus.isDownloading
+                        ? "bg-cyan-950/60 text-cyan-300 border border-cyan-500/40 animate-pulse"
                         : downloadStatus.isDone
-                        ? "text-emerald-400 border border-emerald-500/50 bg-emerald-500/10 animate-pulse"
+                        ? "text-emerald-400 border border-emerald-500/50 bg-emerald-500/10"
                         : "text-textSecondary"
                     }`}
                   >
-                    {downloadStatus.isDone && streamQuality === "opus" && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-0.5" />
+                    {downloadStatus.isDownloading ? (
+                      <>
+                        <Loader2 className="w-2.5 h-2.5 animate-spin text-cyan-400" />
+                        <span>{downloadStatus.progress > 0 ? `${downloadStatus.progress}%` : "FLAC"}</span>
+                      </>
+                    ) : (
+                      <>
+                        {downloadStatus.isDone && streamQuality === "opus" && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-0.5" />
+                        )}
+                        <span>FLAC</span>
+                      </>
                     )}
-                    <span>FLAC</span>
                   </button>
                   <button
-                    onClick={() => switchStreamQuality("opus")}
+                    onClick={() => handleQualitySwitch("opus")}
                     className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
                       streamQuality === "opus"
                         ? "bg-amber-500/25 text-amber-300 border border-amber-500/40"

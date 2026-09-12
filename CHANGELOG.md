@@ -4,6 +4,15 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-22] - 2026-09-13
+
+### Added & Improved
+- **Visual Overhaul of Audio Player**: Completely decluttered the desktop bottom player bar by eliminating redundant badges and grouping the 12 cramped items into 4 balanced, well-spaced functional groups.
+- **Unified Stream Quality Capsule (`[ FLAC | OPUS | ✨ ]`)**: Combined stream format switching, live Soulseek download progress, and signal chain inspection into a single interactive capsule.
+- **Studio Audio Suite Popover**: Consolidated 10-Band Parametric EQ & Presets, Real-Time FFT Spectrum Analyzer, and Analog Ballistic VU Meters into an elegant studio tools popover menu.
+- **Default Opus Streaming**: Set default online music streaming to fast 160kbps Opus for instantaneous click-to-play startup.
+- **Smart FLAC Auto-Download & Seamless Hot-Swap**: Clicking `FLAC` on an online track automatically triggers background Soulseek lossless retrieval, displays live transfer progress on the button, keeps playing Opus without interruption, and automatically hot-swaps to the bit-perfect FLAC master at the exact millisecond upon completion.
+
 ## [1.0.0-21] - 2026-09-13
 
 ### Added & Improved
