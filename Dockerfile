@@ -38,6 +38,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=backend-builder /app/kv-tidal /app/kv-tidal
 COPY --from=frontend-builder /app/frontend/out /app/web
 
+# Bundle native self-contained slskd daemon & assets
+COPY spk/bin/slskd /usr/local/bin/slskd
+COPY spk/share/slskd /app/share/slskd
+COPY docker/entrypoint.sh /app/entrypoint.sh
+
 ENV HOST=0.0.0.0 \
     PORT=8080 \
     PUID=1000 \
@@ -46,11 +51,11 @@ ENV HOST=0.0.0.0 \
     WEB_DIR=/app/web \
     MUSIC_DIR=/music
 
-RUN mkdir -p /data /music && chmod 777 /data /music && chmod +x /app/kv-tidal
+RUN mkdir -p /data /music && chmod 777 /data /music && chmod +x /app/kv-tidal /usr/local/bin/slskd /app/entrypoint.sh
 
-EXPOSE 8080
+EXPOSE 8080 5030 50300
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/rest/ping.view || exit 1
 
-ENTRYPOINT ["/app/kv-tidal"]
+ENTRYPOINT ["/app/entrypoint.sh"]

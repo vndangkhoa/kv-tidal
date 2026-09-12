@@ -61,6 +61,33 @@ fi
 echo "Bundling standalone self-contained yt-dlp_linux into SPK package..."
 cp "$YT_DLP_STANDALONE" "$STAGE_DIR/package/bin/yt-dlp"
 
+# Bundle standalone self-contained ELF slskd (Soulseek Lossless P2P Daemon)
+SLSKD_ZIP="$ROOT_DIR/spk/bin/slskd-0.26.0-linux-x64.zip"
+SLSKD_BIN="$ROOT_DIR/spk/bin/slskd"
+SLSKD_SHARE="$ROOT_DIR/spk/share/slskd"
+
+if [ ! -f "$SLSKD_BIN" ] || [ ! -d "$SLSKD_SHARE/wwwroot" ]; then
+    mkdir -p "$ROOT_DIR/spk/bin" "$ROOT_DIR/spk/share/slskd"
+    if [ ! -f "$SLSKD_ZIP" ]; then
+        echo "Downloading standalone Linux x86_64 slskd (0.26.0)..."
+        curl -sL "https://github.com/slskd/slskd/releases/download/0.26.0/slskd-0.26.0-linux-x64.zip" -o "$SLSKD_ZIP"
+    fi
+    echo "Extracting slskd binary & assets..."
+    rm -rf "$ROOT_DIR/spk/bin_tmp_slskd"
+    unzip -qo "$SLSKD_ZIP" -d "$ROOT_DIR/spk/bin_tmp_slskd"
+    mv "$ROOT_DIR/spk/bin_tmp_slskd/slskd" "$SLSKD_BIN"
+    cp -r "$ROOT_DIR/spk/bin_tmp_slskd/wwwroot" "$SLSKD_SHARE/"
+    cp "$ROOT_DIR/spk/bin_tmp_slskd/slskd.staticwebassets.endpoints.json" "$SLSKD_SHARE/"
+    rm -rf "$ROOT_DIR/spk/bin_tmp_slskd"
+    chmod +x "$SLSKD_BIN"
+fi
+
+echo "Bundling standalone self-contained slskd daemon & assets into SPK package..."
+mkdir -p "$STAGE_DIR/package/share/slskd"
+cp "$SLSKD_BIN" "$STAGE_DIR/package/bin/slskd"
+cp -r "$SLSKD_SHARE/"* "$STAGE_DIR/package/share/slskd/"
+ln -sfn ../share/slskd/wwwroot "$STAGE_DIR/package/bin/wwwroot"
+
 chmod +x "$STAGE_DIR/package/bin/"*
 
 echo "=== [2/4] Packaging package.tgz ==="

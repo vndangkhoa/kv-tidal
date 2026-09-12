@@ -4,6 +4,23 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-20] - 2026-09-13
+
+### Added & Changed
+- **Pure Lossless Soulseek Download Engine**: Completely replaced the `yt-dlp --audio-format flac` fake-FLAC download fallback with authentic Soulseek P2P lossless retrieval. All downloaded tracks are genuine 16-bit to 24-bit/96kHz studio FLAC files directly saved to the Synology music library.
+- **Real-Time P2P Transfer Progress**: Integrated live telemetry polling from `slskd` (`bytesTransferred`, `averageSpeed`, ETA, percentage) directly into KV-Tidal's download queue.
+- **Fixed Native `slskd` Daemon Launch**: Corrected relative webroot path discovery (`bin/wwwroot -> ../share/slskd/wwwroot`) and disabled HTTPS port binding conflict in SPK service supervisor (`start-stop-status`) and Docker `entrypoint.sh`.
+- **Files Action Bar Overlay Fix**: Fixed floating clipboard (Copy/Cut/Paste) and multi-select action bars to dynamically float above the bottom audio player bar (`bottom-[92px]`).
+
+## [1.0.0-19] - 2026-09-12
+
+### Added
+- **Native Self-Contained `slskd` Bundled in SPK Package**: Bundled the full Linux x86_64 self-contained Soulseek (`slskd` v0.26.0) daemon and web assets directly into the SPK package (`package/bin/slskd`, `package/share/slskd/`). Eliminates any dependency on Docker, Container Manager, or manual configuration for public end-users.
+- **Automated Service Lifecycle & PID Management**: `start-stop-status` now supervises and launches both `kv-tidal` and `slskd` as native background services, redirecting logs to `/var/packages/kvtidal/var/slskd.log` and cleanly handling restarts and package stops.
+- **Automated Music Folder Target Mapping**: `postinst` automatically maps `directories: downloads` to the detected Synology music shared folder (`/volume2/music` or `/volume1/music`).
+- **Real-Time Web UI Config Sync**: Changes to Soulseek username/password in KV-Tidal `/settings` are automatically synchronized to `slskd.yml` on disk, allowing hot-reloads and automatic login without command-line access.
+- **Docker Container Integration**: Updated Dockerfile and `entrypoint.sh` to bundle and supervise `slskd` inside the unified container image for Docker Hub, GHCR, and Forgejo distributions.
+
 ## [1.0.0-18] - 2026-09-12
 
 ### Added

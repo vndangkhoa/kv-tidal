@@ -23,6 +23,19 @@ pub struct SoulseekStatus {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoulseekDownloadStatus {
+    pub filename: String,
+    pub size: u64,
+    pub bytes_transferred: u64,
+    pub speed_bytes: u64,
+    pub percent_complete: f32,
+    pub state: String,
+    pub is_completed: bool,
+    pub is_failed: bool,
+    pub error: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct SoulseekEngine {
     client: reqwest::Client,
@@ -290,4 +303,244 @@ impl SoulseekEngine {
         info!("Successfully queued Soulseek download for '{}' from user '{}'", filename, username);
         Ok(format!("Queued: {}", filename))
     }
+
+    /// Poll slskd for the transfer status of a queued download file
+    pub async fn poll_download_status(
+        &self,
+        username: &str,
+        filename: &str,
+    ) -> Result<SoulseekDownloadStatus, String> {
+        let (base_url, api_key, enabled) = {
+            let cfg = self.config.read().await;
+            (cfg.soulseek_url.clone(), cfg.soulseek_api_key.clone(), cfg.soulseek_enabled)
+        };
+
+        if !enabled {
+            return Err("Soulseek engine is disabled".to_string());
+        }
+
+        let endpoint = format!("{}/api/v0/transfers/downloads", base_url.trim_end_matches('/'));
+        let headers = self.build_headers(api_key.as_deref());
+
+        let resp = self
+            .client
+            .get(&endpoint)
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|e| format!("Failed to poll slskd downloads: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("slskd downloads poll returned HTTP {}", resp.status()));
+        }
+
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse slskd downloads response: {}", e))?;
+
+        if let Some(status) = find_transfer_in_json(&json, filename) {
+            return Ok(status);
+        }
+
+        // Check user-specific download endpoint if not found in global list
+        let user_endpoint = format!(
+            "{}/api/v0/transfers/downloads/{}",
+            base_url.trim_end_matches('/'),
+            urlencoding::encode(username)
+        );
+        if let Ok(user_resp) = self.client.get(&user_endpoint).headers(headers).send().await {
+            if let Ok(user_json) = user_resp.json::<serde_json::Value>().await {
+                if let Some(status) = find_transfer_in_json(&user_json, filename) {
+                    return Ok(status);
+                }
+            }
+        }
+
+        Err(format!("Transfer for '{}' not found in slskd queue", filename))
+    }
+}
+
+/// Recursively search slskd transfer JSON hierarchy for matching file
+fn find_transfer_in_json(v: &serde_json::Value, target_filename: &str) -> Option<SoulseekDownloadStatus> {
+    let normalized_target = target_filename.replace('\\', "/");
+    let target_base = std::path::Path::new(&normalized_target)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(target_filename);
+
+    match v {
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                if let Some(res) = find_transfer_in_json(item, target_filename) {
+                    return Some(res);
+                }
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(fname_val) = map.get("filename").and_then(|f| f.as_str()) {
+                let normalized_fname = fname_val.replace('\\', "/");
+                let fname_base = std::path::Path::new(&normalized_fname)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(fname_val);
+
+                if fname_val == target_filename || fname_base == target_base || fname_val.ends_with(target_base) || normalized_fname.ends_with(target_base) {
+                    let size = map.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                    let bytes_transferred = map
+                        .get("bytesTransferred")
+                        .or_else(|| map.get("bytes_transferred"))
+                        .and_then(|b| b.as_u64())
+                        .unwrap_or(0);
+                    let speed = map
+                        .get("averageSpeed")
+                        .or_else(|| map.get("speed"))
+                        .and_then(|s| s.as_u64().or_else(|| s.as_f64().map(|f| f as u64)))
+                        .unwrap_or(0);
+                    let percent = map
+                        .get("percentComplete")
+                        .or_else(|| map.get("percent"))
+                        .and_then(|p| p.as_f64().map(|f| f as f32))
+                        .unwrap_or_else(|| {
+                            if size > 0 {
+                                ((bytes_transferred as f32 / size as f32) * 100.0).min(100.0)
+                            } else {
+                                0.0
+                            }
+                        });
+                    let state = map
+                        .get("state")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("Queued")
+                        .to_string();
+
+                    let lower = state.to_lowercase();
+                    let is_completed = lower.contains("completed") || lower.contains("succeeded") || lower.contains("finished");
+                    let is_failed = lower.contains("error")
+                        || lower.contains("fail")
+                        || lower.contains("cancel")
+                        || lower.contains("abort")
+                        || lower.contains("timedout")
+                        || lower.contains("rejected");
+
+                    return Some(SoulseekDownloadStatus {
+                        filename: fname_val.to_string(),
+                        size,
+                        bytes_transferred,
+                        speed_bytes: speed,
+                        percent_complete: percent,
+                        state: state.clone(),
+                        is_completed,
+                        is_failed,
+                        error: if is_failed {
+                            Some(format!("Soulseek transfer failed with state: {}", state))
+                        } else {
+                            None
+                        },
+                    });
+                }
+            }
+
+            for (_, val) in map {
+                if let Some(res) = find_transfer_in_json(val, target_filename) {
+                    return Some(res);
+                }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Recursively find a completed download file on disk in the downloads folder
+pub async fn find_downloaded_file_on_disk(
+    download_dir: &std::path::Path,
+    username: &str,
+    filename: &str,
+) -> Option<std::path::PathBuf> {
+    let normalized = filename.replace('\\', "/");
+    let base_name = std::path::Path::new(&normalized)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(filename);
+
+    let candidate1 = download_dir.join(&normalized);
+    if candidate1.is_file() {
+        return Some(candidate1);
+    }
+    let candidate2 = download_dir.join(username).join(&normalized);
+    if candidate2.is_file() {
+        return Some(candidate2);
+    }
+    let candidate3 = download_dir.join(base_name);
+    if candidate3.is_file() {
+        return Some(candidate3);
+    }
+    let candidate4 = download_dir.join(username).join(base_name);
+    if candidate4.is_file() {
+        return Some(candidate4);
+    }
+
+    // Walk subdirectories in download_dir
+    let mut stack = vec![download_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if let Ok(ft) = entry.file_type().await {
+                    if ft.is_dir() {
+                        stack.push(path);
+                    } else if ft.is_file() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name == base_name || name.ends_with(base_name) {
+                                return Some(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Write or update the native slskd configuration file (slskd.yml)
+pub fn sync_slskd_config(
+    data_dir: &std::path::Path,
+    download_dir: &std::path::Path,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> std::io::Result<()> {
+    let slskd_dir = data_dir.join("slskd");
+    std::fs::create_dir_all(&slskd_dir)?;
+    let incomplete_dir = slskd_dir.join("incomplete");
+    std::fs::create_dir_all(&incomplete_dir)?;
+
+    let config_path = slskd_dir.join("slskd.yml");
+    let u = username.unwrap_or("").trim();
+    let p = password.unwrap_or("").trim();
+    let d = download_dir.to_string_lossy();
+    let inc = incomplete_dir.to_string_lossy();
+
+    let yaml_content = format!(
+r#"web:
+  port: 5030
+  authentication:
+    disabled: true
+
+directories:
+  downloads: "{d}"
+  incomplete: "{inc}"
+
+soulseek:
+  username: "{u}"
+  password: "{p}"
+  listen_port: 50300
+  diagnostic_level: Info
+"#
+    );
+
+    std::fs::write(&config_path, yaml_content)?;
+    info!("Synchronized slskd native configuration at {:?}", config_path);
+    Ok(())
 }

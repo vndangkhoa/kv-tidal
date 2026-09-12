@@ -112,6 +112,49 @@ fi
 chmod +x "${INSTALL_DIR}/bin/"* 2>/dev/null || true
 chmod 755 "/var/packages/${PACKAGE}/scripts/"* 2>/dev/null || true
 
+# Provision slskd (Soulseek Lossless P2P Daemon) configuration and storage
+SLSKD_DIR="${VAR_DIR}/slskd"
+mkdir -p "$SLSKD_DIR" "$SLSKD_DIR/incomplete"
+chmod 777 "$SLSKD_DIR" "$SLSKD_DIR/incomplete" 2>/dev/null || true
+
+SLSKD_CFG="${SLSKD_DIR}/slskd.yml"
+EXISTING_USER=""
+EXISTING_PASS=""
+if [ -f "/volume2/docker/slskd/slskd.yml" ]; then
+    EXISTING_USER="$(grep -E '^[[:space:]]*username:[[:space:]]*[^~[:space:]]+' "/volume2/docker/slskd/slskd.yml" | awk '{print $2}' | tr -d ' "' | head -n 1)"
+    EXISTING_PASS="$(grep -E '^[[:space:]]*password:[[:space:]]*[^~[:space:]]+' "/volume2/docker/slskd/slskd.yml" | awk '{print $2}' | tr -d ' "' | head -n 1)"
+fi
+
+if [ ! -f "$SLSKD_CFG" ]; then
+cat > "$SLSKD_CFG" << SLSKD_EOF
+web:
+  port: 5030
+  authentication:
+    disabled: true
+
+directories:
+  downloads: "${MUSIC_DIR}"
+  incomplete: "${SLSKD_DIR}/incomplete"
+
+soulseek:
+  username: "${EXISTING_USER}"
+  password: "${EXISTING_PASS}"
+  listen_port: 50300
+  diagnostic_level: Info
+SLSKD_EOF
+else
+  if [ -n "$MUSIC_DIR" ]; then
+    sed -i -E "s|downloads:.*|downloads: \"${MUSIC_DIR}\"|" "$SLSKD_CFG"
+  fi
+  if [ -n "$EXISTING_USER" ] && ! grep -q "username: [a-zA-Z0-9]" "$SLSKD_CFG"; then
+    sed -i -E "s|username:.*|username: \"${EXISTING_USER}\"|" "$SLSKD_CFG"
+  fi
+  if [ -n "$EXISTING_PASS" ] && ! grep -q "password: [a-zA-Z0-9]" "$SLSKD_CFG"; then
+    sed -i -E "s|password:.*|password: \"${EXISTING_PASS}\"|" "$SLSKD_CFG"
+  fi
+fi
+chmod 666 "$SLSKD_CFG" 2>/dev/null || true
+
 chown -R sc-kvtidal:synocache "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true
 chmod 775 "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true
 

@@ -262,4 +262,48 @@ fn test_stream_request_format_deserialization() {
     assert_eq!(req_flac.format.as_deref(), Some("flac"));
 }
 
+#[test]
+fn test_sync_slskd_config_creates_valid_yaml() {
+    let temp = tempfile::tempdir().unwrap();
+    let data_dir = temp.path().join("var");
+    let download_dir = temp.path().join("music");
+
+    let res = kv_tidal::engines::soulseek::sync_slskd_config(
+        &data_dir,
+        &download_dir,
+        Some("test_user"),
+        Some("test_pass123"),
+    );
+    assert!(res.is_ok());
+
+    let yaml_file = data_dir.join("slskd").join("slskd.yml");
+    assert!(yaml_file.exists());
+
+    let content = std::fs::read_to_string(&yaml_file).unwrap();
+    assert!(content.contains("port: 5030"));
+    assert!(content.contains("username: \"test_user\""));
+    assert!(content.contains("password: \"test_pass123\""));
+    assert!(content.contains(&download_dir.to_string_lossy().to_string()));
+}
+
+#[tokio::test]
+async fn test_find_downloaded_file_on_disk() {
+    let temp = tempfile::tempdir().unwrap();
+    let music_dir = temp.path().join("music");
+    let user_dir = music_dir.join("beastlyhobos").join("subfolder");
+    std::fs::create_dir_all(&user_dir).unwrap();
+
+    let target_file = user_dir.join("01 - CHIHIRO.flac");
+    std::fs::write(&target_file, b"fake flac content for disk lookup test").unwrap();
+
+    let found = kv_tidal::engines::soulseek::find_downloaded_file_on_disk(
+        &music_dir,
+        "beastlyhobos",
+        "music\\subfolder\\01 - CHIHIRO.flac",
+    ).await;
+
+    assert!(found.is_some());
+    assert_eq!(found.unwrap(), target_file);
+}
+
 

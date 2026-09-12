@@ -31,11 +31,53 @@ start_daemon() {
         fi
     fi
 
+    # 1. Start bundled slskd (Soulseek Lossless P2P Daemon)
+    SLSKD_BIN="${INSTALL_DIR}/bin/slskd"
+    SLSKD_PID="${VAR_DIR}/slskd.pid"
+    SLSKD_LOG="${VAR_DIR}/slskd.log"
+    SLSKD_DIR="${VAR_DIR}/slskd"
+
+    if [ -x "$SLSKD_BIN" ]; then
+        if [ ! -f "$SLSKD_PID" ] || ! kill -0 $(cat "$SLSKD_PID") 2>/dev/null; then
+            IS_PORT_TAKEN=0
+            if command -v nc >/dev/null 2>&1; then
+                nc -z 127.0.0.1 5030 2>/dev/null && IS_PORT_TAKEN=1
+            fi
+            if [ "$IS_PORT_TAKEN" -eq 0 ]; then
+                mkdir -p "$SLSKD_DIR" "$SLSKD_DIR/incomplete"
+                [ ! -e "${INSTALL_DIR}/bin/wwwroot" ] && [ -d "${INSTALL_DIR}/share/slskd/wwwroot" ] && ln -sfn "${INSTALL_DIR}/share/slskd/wwwroot" "${INSTALL_DIR}/bin/wwwroot"
+                export SLSKD_APP_DIR="$SLSKD_DIR"
+                export SLSKD_CONFIG="$SLSKD_DIR/slskd.yml"
+                export SLSKD_NO_AUTH="true"
+                export SLSKD_NO_VERSION_CHECK="true"
+                export SLSKD_NO_COLOR="true"
+                export SLSKD_NO_HTTPS="true"
+                nohup "$SLSKD_BIN" --no-https >> "$SLSKD_LOG" 2>&1 &
+                echo $! > "$SLSKD_PID"
+            fi
+        fi
+    fi
+
     nohup "$DAEMON" >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
 }
 
 stop_daemon() {
+    # Stop slskd daemon
+    SLSKD_PID="${VAR_DIR}/slskd.pid"
+    if [ -f "$SLSKD_PID" ]; then
+        SPID=$(cat "$SLSKD_PID")
+        kill "$SPID" 2>/dev/null
+        for i in 1 2 3; do
+            if ! kill -0 "$SPID" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+        kill -9 "$SPID" 2>/dev/null
+        rm -f "$SLSKD_PID"
+    fi
+
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE")
         kill "$PID" 2>/dev/null

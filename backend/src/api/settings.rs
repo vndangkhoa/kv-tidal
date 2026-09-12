@@ -128,6 +128,14 @@ async fn update_settings(
         ));
     }
 
+    // Synchronize native slskd configuration (slskd.yml)
+    let _ = crate::engines::soulseek::sync_slskd_config(
+        &cfg.data_dir,
+        &cfg.download_dir,
+        cfg.soulseek_username.as_deref(),
+        cfg.soulseek_password.as_deref(),
+    );
+
     info!("Settings updated and saved to {:?}", config_path);
     Ok(Json(serde_json::json!({
         "success": true,

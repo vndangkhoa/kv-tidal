@@ -60,7 +60,7 @@ export interface ColumnItem {
 }
 
 export default function FilesPage() {
-  const { playTrack, addAllToQueue, activeDeviceId } = usePlayer();
+  const { playTrack, addAllToQueue, activeDeviceId, currentTrack } = usePlayer();
   const [currentPath, setCurrentPath] = useState<string>("");
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [entries, setEntries] = useState<FsEntry[]>([]);
@@ -891,6 +891,8 @@ export default function FilesPage() {
     const paths = items.map((i) => i.path);
     const sourceDir = activePane === "left" ? currentPath : paneBPath;
     setClipboard({ action: "cut", paths, sourceDir });
+    setSelectedPaths(new Set());
+    setPaneBSelectedPaths(new Set());
     showNotification(`Cut ${paths.length} item(s). Navigate to target folder and paste.`);
   };
 
@@ -910,6 +912,8 @@ export default function FilesPage() {
     const paths = items.map((i) => i.path);
     const sourceDir = activePane === "left" ? currentPath : paneBPath;
     setClipboard({ action: "copy", paths, sourceDir });
+    setSelectedPaths(new Set());
+    setPaneBSelectedPaths(new Set());
     showNotification(`Copied ${paths.length} item(s) to clipboard.`);
   };
 
@@ -2586,7 +2590,17 @@ export default function FilesPage() {
 
       {/* Floating Multi-Select Action Bar */}
       {selectedPaths.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-surface/95 backdrop-blur-md border border-primary/40 rounded-2xl shadow-2xl px-5 py-3 flex items-center space-x-4 animate-in slide-in-from-bottom-5">
+        <div
+          className={`fixed left-1/2 -translate-x-1/2 z-50 bg-surface/95 backdrop-blur-md border border-primary/40 rounded-2xl shadow-2xl px-5 py-3 flex items-center space-x-4 animate-in slide-in-from-bottom-5 transition-all duration-200 ${
+            Boolean(currentTrack)
+              ? clipboard
+                ? "bottom-[152px] md:bottom-[152px]"
+                : "bottom-[92px] md:bottom-[92px]"
+              : clipboard
+              ? "bottom-[80px] md:bottom-[72px]"
+              : "bottom-20 md:bottom-6"
+          }`}
+        >
           <div className="text-xs font-mono">
             <span className="text-primary font-bold">{selectedPaths.size}</span>
             <span className="text-textSecondary"> selected ({formatSize(selectedTotalBytes)})</span>
@@ -2708,7 +2722,13 @@ export default function FilesPage() {
 
       {/* Floating Clipboard Dock */}
       {clipboard && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 bg-surface/95 backdrop-blur-xl border border-primary/50 px-4 py-2 rounded-2xl shadow-2xl flex items-center space-x-3 text-xs font-mono animate-in slide-in-from-bottom-3">
+        <div
+          className={`fixed left-1/2 -translate-x-1/2 z-50 bg-surface/95 backdrop-blur-xl border border-primary/50 px-4 py-2 rounded-2xl shadow-2xl flex items-center space-x-3 text-xs font-mono animate-in slide-in-from-bottom-3 transition-all duration-200 ${
+            Boolean(currentTrack)
+              ? "bottom-[92px] md:bottom-[92px]"
+              : "bottom-20 md:bottom-6"
+          }`}
+        >
           <div className="flex items-center space-x-2">
             {clipboard.action === "cut" ? (
               <Scissors className="w-4 h-4 text-amber-400 animate-pulse" />

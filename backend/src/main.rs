@@ -47,6 +47,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let trending = trending::new_trending_store();
     let library = storage::scanner::new_library_store();
 
+    // Synchronize native slskd configuration on startup
+    {
+        let cfg = config.read().await;
+        let _ = engines::soulseek::sync_slskd_config(
+            &cfg.data_dir,
+            &cfg.download_dir,
+            cfg.soulseek_username.as_deref(),
+            cfg.soulseek_password.as_deref(),
+        );
+    }
+
     // 4. Start Background Tasks
     trending::start_trending_updater(trending.clone()).await;
     storage::watcher::start_library_watcher(config.clone(), library.clone()).await;

@@ -10,8 +10,9 @@ use futures_util::StreamExt;
 use lofty::file::AudioFile;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -73,53 +74,7 @@ pub struct DownloadRequest {
     pub source: Option<String>,
 }
 
-fn parse_ytdlp_line(line: &str) -> Option<(f32, Option<u64>, Option<u64>)> {
-    if !line.contains("[download]") || !line.contains('%') {
-        return None;
-    }
-    let pct_idx = line.find('%')?;
-    let slice_before_pct = &line[..pct_idx];
-    let num_start = slice_before_pct.rfind(|c: char| c.is_whitespace() || c == ']')?;
-    let pct = slice_before_pct[num_start + 1..].trim().parse::<f32>().ok()?;
 
-    let speed_kbps = if let Some(at_idx) = line.find(" at ") {
-        let after_at = &line[at_idx + 4..];
-        let token = after_at.split_whitespace().next().unwrap_or("");
-        if token.ends_with("KiB/s") || token.ends_with("k/s") {
-            token.trim_end_matches("KiB/s").trim_end_matches("k/s").parse::<f32>().ok().map(|v| v as u64)
-        } else if token.ends_with("MiB/s") || token.ends_with("M/s") {
-            token.trim_end_matches("MiB/s").trim_end_matches("M/s").parse::<f32>().ok().map(|v| (v * 1024.0) as u64)
-        } else if token.ends_with("GiB/s") {
-            token.trim_end_matches("GiB/s").parse::<f32>().ok().map(|v| (v * 1024.0 * 1024.0) as u64)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let eta_seconds = if let Some(eta_idx) = line.find(" ETA ") {
-        let after_eta = &line[eta_idx + 5..];
-        let token = after_eta.split_whitespace().next().unwrap_or("");
-        let parts: Vec<&str> = token.split(':').collect();
-        if parts.len() == 2 {
-            let mins = parts[0].parse::<u64>().unwrap_or(0);
-            let secs = parts[1].parse::<u64>().unwrap_or(0);
-            Some(mins * 60 + secs)
-        } else if parts.len() == 3 {
-            let hrs = parts[0].parse::<u64>().unwrap_or(0);
-            let mins = parts[1].parse::<u64>().unwrap_or(0);
-            let secs = parts[2].parse::<u64>().unwrap_or(0);
-            Some(hrs * 3600 + mins * 60 + secs)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    Some((pct, speed_kbps, eta_seconds))
-}
 
 async fn update_job_stage(
     state: &AppState,
@@ -226,74 +181,6 @@ async fn fetch_audio_from_url_streaming(
     Ok(buffer)
 }
 
-async fn fetch_audio_flac_ytdlp(
-    artist: &str,
-    title: &str,
-    state: &AppState,
-    job_id: &str,
-) -> Result<Vec<u8>, String> {
-    let temp_stem = format!("/tmp/dl_{}", uuid::Uuid::new_v4());
-    let template = format!("{}.%(ext)s", temp_stem);
-    let query = format!("ytsearch1:{} {}", artist, title);
-
-    let yt_binary = match crate::engines::stream_resolver::find_yt_dlp() {
-        Some(p) => p,
-        None => crate::engines::stream_resolver::bootstrap_yt_dlp()
-            .await
-            .unwrap_or_else(|| std::path::PathBuf::from("yt-dlp")),
-    };
-
-    let mut cmd = tokio::process::Command::new(&yt_binary);
-    cmd.args([
-        &query,
-        "-f", "ba/b",
-        "-x",
-        "--audio-format", "flac",
-        "--max-filesize", "150M",
-        "--newline",
-        "-o", &template,
-    ]);
-
-    let base_tmp = std::env::var("TMPDIR").ok().and_then(|t| {
-        if t != "/tmp" { Some(std::path::PathBuf::from(t)) } else { None }
-    }).unwrap_or_else(|| {
-        std::env::var("DATA_DIR").map(|d| std::path::PathBuf::from(d).join("tmp")).unwrap_or_else(|_| std::path::PathBuf::from("./data/tmp"))
-    });
-    let _ = std::fs::create_dir_all(&base_tmp);
-    cmd.env("TMPDIR", &base_tmp);
-
-    let mut child = cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn yt-dlp ({:?}): {}", yt_binary, e))?;
-
-    if let Some(stdout) = child.stdout.take() {
-        use tokio::io::AsyncBufReadExt;
-        let mut reader = tokio::io::BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            if let Some((pct, speed_kbps, eta)) = parse_ytdlp_line(&line) {
-                let mapped_pct = (10.0 + (pct * 0.70)).min(80.0) as u8;
-                update_job_telemetry(state, job_id, 0, None, speed_kbps, eta, mapped_pct).await;
-            }
-        }
-    }
-
-    let status = child.wait().await.map_err(|e| e.to_string())?;
-    if status.success() {
-        let flac_path = format!("{}.flac", temp_stem);
-        if let Ok(bytes) = tokio::fs::read(&flac_path).await {
-            let _ = tokio::fs::remove_file(&flac_path).await;
-            if bytes.len() > 1024 {
-                info!("yt-dlp successfully extracted {} bytes FLAC for {} - {}", bytes.len(), artist, title);
-                return Ok(bytes);
-            }
-        }
-    }
-
-    Err(format!("yt-dlp failed to extract audio for '{} - {}'", artist, title))
-}
-
 async fn run_download_pipeline(state: AppState, job_id: String, payload: DownloadRequest) {
     let _permit = match state.download_semaphore.acquire().await {
         Ok(p) => p,
@@ -321,6 +208,7 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
 
     let mut audio_bytes_opt = None;
 
+    // Priority 1: Direct Tidal HiFi Stream (if token is available)
     if let Some(ref id) = payload.track_id {
         if let Ok(tidal_url) = state.tidal.resolve_stream_url(id, None).await {
             info!("Resolved direct Tidal HiFi stream URL for track download: {}", id);
@@ -330,18 +218,118 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
         }
     }
 
-    // Try Soulseek Lossless P2P retrieval if no Tidal HiFi stream
+    // Priority 2: Pure Bit-Perfect Lossless Soulseek P2P Retrieval
     if audio_bytes_opt.is_none() {
-        if let Ok(candidates) = state.soulseek.search_flac(&payload.artist, &payload.title).await {
-            if let Some(candidate) = candidates.first() {
-                info!(
-                    "Found Soulseek FLAC file for '{} - {}': {} ({} bytes, user: {})",
-                    payload.artist, payload.title, candidate.filename, candidate.size, candidate.username
-                );
-                let _ = state
-                    .soulseek
-                    .queue_download(&candidate.username, &candidate.filename, candidate.size)
-                    .await;
+        info!("Searching Soulseek network for authentic FLAC: {} - {}", payload.artist, payload.title);
+        match state.soulseek.search_flac(&payload.artist, &payload.title).await {
+            Ok(candidates) if !candidates.is_empty() => {
+                info!("Found {} lossless FLAC candidates on Soulseek", candidates.len());
+                let download_base_path = std::path::PathBuf::from(&download_dir);
+
+                // Try candidates (up to 3 best candidates)
+                for candidate in candidates.iter().take(3) {
+                    info!(
+                        "Attempting Soulseek download from user '{}': {} ({} bytes, {} bit, {} Hz)",
+                        candidate.username,
+                        candidate.filename,
+                        candidate.size,
+                        candidate.bit_depth.unwrap_or(16),
+                        candidate.sample_rate.unwrap_or(44100)
+                    );
+
+                    if let Err(e) = state.soulseek.queue_download(&candidate.username, &candidate.filename, candidate.size).await {
+                        warn!("Failed to queue Soulseek download from user '{}': {}", candidate.username, e);
+                        continue;
+                    }
+
+                    // Poll transfer status up to 300 seconds
+                    let poll_start = tokio::time::Instant::now();
+                    let mut completed_ok = false;
+
+                    while poll_start.elapsed() < Duration::from_secs(300) {
+                        tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                        match state.soulseek.poll_download_status(&candidate.username, &candidate.filename).await {
+                            Ok(status) => {
+                                let mapped_pct = (10.0f32 + (status.percent_complete * 0.70f32)).min(80.0f32) as u8;
+                                let eta = if status.speed_bytes > 0 {
+                                    Some((status.size.saturating_sub(status.bytes_transferred)) / status.speed_bytes)
+                                } else {
+                                    None
+                                };
+
+                                update_job_telemetry(
+                                    &state,
+                                    &job_id,
+                                    status.bytes_transferred,
+                                    Some(status.size),
+                                    Some(status.speed_bytes / 1024),
+                                    eta,
+                                    mapped_pct,
+                                ).await;
+
+                                if status.is_completed {
+                                    info!("Soulseek transfer completed for '{}'", candidate.filename);
+                                    completed_ok = true;
+                                    break;
+                                }
+
+                                if status.is_failed {
+                                    warn!("Soulseek transfer failed for '{}': {:?}", candidate.filename, status.error);
+                                    break;
+                                }
+                            }
+                            Err(_) => {
+                                // Check if the file is already finished and present on disk
+                                if let Some(local_path) = crate::engines::soulseek::find_downloaded_file_on_disk(
+                                    &download_base_path,
+                                    &candidate.username,
+                                    &candidate.filename,
+                                ).await {
+                                    if let Ok(meta) = tokio::fs::metadata(&local_path).await {
+                                        if meta.len() >= 1024 {
+                                            completed_ok = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if completed_ok {
+                        // Locate and read the completed file from disk
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        if let Some(local_path) = crate::engines::soulseek::find_downloaded_file_on_disk(
+                            &download_base_path,
+                            &candidate.username,
+                            &candidate.filename,
+                        ).await {
+                            match tokio::fs::read(&local_path).await {
+                                Ok(bytes) if bytes.len() >= 1024 => {
+                                    info!(
+                                        "Successfully read {} bytes genuine FLAC from {:?}",
+                                        bytes.len(),
+                                        local_path
+                                    );
+                                    let _ = tokio::fs::remove_file(&local_path).await;
+                                    audio_bytes_opt = Some(bytes);
+                                    break;
+                                }
+                                Ok(_) => warn!("Downloaded file too small: {:?}", local_path),
+                                Err(e) => warn!("Failed reading downloaded file {:?}: {}", local_path, e),
+                            }
+                        } else {
+                            warn!("Completed file not found on disk for '{}'", candidate.filename);
+                        }
+                    }
+                }
+            }
+            Ok(_) => {
+                info!("No FLAC candidates found on Soulseek for '{} - {}'", payload.artist, payload.title);
+            }
+            Err(e) => {
+                warn!("Soulseek search error: {}", e);
             }
         }
     }
@@ -349,32 +337,13 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
     let audio_bytes = match audio_bytes_opt {
         Some(b) => b,
         None => {
-            match fetch_audio_flac_ytdlp(&payload.artist, &payload.title, &state, &job_id).await {
-                Ok(b) => b,
-                Err(e) => {
-                    if let Some(ref url) = payload.stream_url {
-                        if !url.is_empty() {
-                            match fetch_audio_from_url_streaming(url, &state, &job_id).await {
-                                Ok(b) => b,
-                                Err(err_direct) => {
-                                    let err_msg = format!("Download failed: yt-dlp ({}) & URL ({})", e, err_direct);
-                                    error!("{}", err_msg);
-                                    update_job_stage(&state, &job_id, DownloadStage::Failed, 0, Some(err_msg), None).await;
-                                    return;
-                                }
-                            }
-                        } else {
-                            error!("Download failed: {}", e);
-                            update_job_stage(&state, &job_id, DownloadStage::Failed, 0, Some(e), None).await;
-                            return;
-                        }
-                    } else {
-                        error!("Download failed: {}", e);
-                        update_job_stage(&state, &job_id, DownloadStage::Failed, 0, Some(e), None).await;
-                        return;
-                    }
-                }
-            }
+            let err_msg = format!(
+                "Lossless download failed: No authentic studio FLAC found on Soulseek network for '{} - {}'",
+                payload.artist, payload.title
+            );
+            error!("{}", err_msg);
+            update_job_stage(&state, &job_id, DownloadStage::Failed, 0, Some(err_msg), None).await;
+            return;
         }
     };
 
