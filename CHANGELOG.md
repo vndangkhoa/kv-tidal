@@ -4,6 +4,15 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-17] - 2026-09-12
+
+### Added
+- **Instant Seamless Audio Quality Switcher (`[ FLAC | OPUS ]`)**: Added an interactive quality selector pill to both desktop player bar and mobile playback sheet. Allows users to switch on-the-fly between **FLAC (Bit-Perfect Lossless Master)** and **OPUS (Fast Web Stream 160kbps)** without losing playback position (exact millisecond timestamp preserved seamlessly).
+- **A/B Audiophile Audio Comparison**: Listeners can directly compare compressed 160k Opus vs uncompressed 24-bit Studio Master FLAC in real-time mid-song on their DAC/headphones.
+- **Mobile 4G/5G Bandwidth Conservation**: Allows switching to 160kbps Opus to save 90% data when roaming or on limited bandwidth, while switching back to FLAC on home Wi-Fi/DAC.
+- **Direct Disk Scan Fallback**: If a Soulseek download finishes before the periodic library scanner triggers, `/api/stream` immediately detects and serves the authentic FLAC file directly from `/volume2/music`.
+- **Persistent Quality Preference**: Preferred quality selection is saved to `localStorage` (`kv_stream_quality`) and honored across all track transitions.
+
 ## [1.0.0-16] - 2026-09-12
 
 ### Added

@@ -243,4 +243,23 @@ async fn test_aiff_transcode_and_scanner() {
     }
 }
 
+#[test]
+fn test_stream_request_format_deserialization() {
+    let json_opus = serde_json::json!({
+        "artist": "Billie Eilish",
+        "title": "bad guy",
+        "format": "opus"
+    });
+    let req_opus: kv_tidal::api::stream::StreamRequest = serde_json::from_value(json_opus).unwrap();
+    assert_eq!(req_opus.format.as_deref(), Some("opus"));
+
+    let json_flac = serde_json::json!({
+        "artist": "Billie Eilish",
+        "title": "bad guy",
+        "format": "flac"
+    });
+    let req_flac: kv_tidal::api::stream::StreamRequest = serde_json::from_value(json_flac).unwrap();
+    assert_eq!(req_flac.format.as_deref(), Some("flac"));
+}
+
 

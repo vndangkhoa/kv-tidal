@@ -297,6 +297,9 @@ interface PlayerContextType {
   getFrequencyData: () => Uint8Array | null;
   getTimeDomainData: () => Uint8Array | null;
   getLiveTelemetry: () => LiveAudioTelemetry;
+  streamQuality: "flac" | "opus";
+  setStreamQuality: (quality: "flac" | "opus") => void;
+  switchStreamQuality: (newQuality: "flac" | "opus") => Promise<void>;
 }
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
@@ -307,6 +310,25 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [progress, setProgress] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [volume, setVolumeState] = useState<number>(0.85);
+
+  // Audio stream quality mode: "flac" (Bit-Perfect Lossless) vs "opus" (Fast Web Stream 160kbps)
+  const [streamQuality, setStreamQualityState] = useState<"flac" | "opus">("flac");
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("kv_stream_quality");
+      if (saved === "opus" || saved === "flac") {
+        setStreamQualityState(saved);
+      }
+    } catch (_) {}
+  }, []);
+
+  const setStreamQuality = useCallback((q: "flac" | "opus") => {
+    setStreamQualityState(q);
+    try {
+      localStorage.setItem("kv_stream_quality", q);
+    } catch (_) {}
+  }, []);
 
   // Audiophile Volume Lock Policy: locked at 1.0 (0.0 dB) in bit-perfect mode
   const [isVolumeLocked, setIsVolumeLocked] = useState<boolean>(true);
@@ -705,8 +727,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       // Play in browser
       if (track.streamUrl) {
-        if (audioRef.current.src !== track.streamUrl) {
-          audioRef.current.src = track.streamUrl;
+        let finalStreamUrl = track.streamUrl;
+        try {
+          const urlObj = new URL(finalStreamUrl, window.location.origin);
+          if (urlObj.pathname.includes("/api/stream")) {
+            urlObj.searchParams.set("format", streamQuality);
+            finalStreamUrl = urlObj.pathname + urlObj.search;
+          }
+        } catch (_) {}
+
+        if (audioRef.current.src !== finalStreamUrl) {
+          audioRef.current.src = finalStreamUrl;
         }
 
         // Micro-fade in on start (prevents planar headphone transducer click)
@@ -733,7 +764,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           });
 
         // Asynchronously probe stream headers for 100% transparent audio badges
-        fetch(track.streamUrl, { method: "HEAD" })
+        fetch(finalStreamUrl, { method: "HEAD" })
           .then((res) => {
             const liveSource = res.headers.get("x-audio-source");
             const liveFormat = res.headers.get("x-audio-format");
@@ -747,6 +778,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
                 if (!prev || prev.id !== track.id) return prev;
                 return {
                   ...prev,
+                  streamUrl: finalStreamUrl,
                   source: liveSource || prev.source,
                   format: liveFormat || prev.format,
                   bitDepth: liveBitDepth ? parseInt(liveBitDepth, 10) : prev.bitDepth,
@@ -764,7 +796,81 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       fetchLyrics(track);
       fetchSuggestions(track);
     },
-    [activeDeviceId, bitPerfectMode, isVolumeLocked, volume, fetchLyrics, fetchSuggestions, initAudioGraph]
+    [activeDeviceId, bitPerfectMode, isVolumeLocked, volume, fetchLyrics, fetchSuggestions, initAudioGraph, streamQuality]
+  );
+
+  // Seamless on-the-fly audio quality switching (preserving exact millisecond position)
+  const switchStreamQuality = useCallback(
+    async (newQuality: "flac" | "opus") => {
+      setStreamQuality(newQuality);
+
+      if (!audioRef.current || !currentTrack) return;
+
+      const audio = audioRef.current;
+      const currentPos = audio.currentTime;
+      const wasPlaying = !audio.paused && isPlaying;
+
+      let currentSrc = audio.src || currentTrack.streamUrl;
+      if (!currentSrc) return;
+
+      let targetUrl: string;
+      try {
+        const urlObj = new URL(currentSrc, window.location.origin);
+        if (urlObj.pathname.includes("/api/stream")) {
+          urlObj.searchParams.set("format", newQuality);
+          targetUrl = urlObj.pathname + urlObj.search;
+        } else {
+          targetUrl = `/api/stream?artist=${encodeURIComponent(currentTrack.artist)}&title=${encodeURIComponent(currentTrack.title)}&format=${newQuality}`;
+        }
+      } catch {
+        targetUrl = `/api/stream?artist=${encodeURIComponent(currentTrack.artist)}&title=${encodeURIComponent(currentTrack.title)}&format=${newQuality}`;
+      }
+
+      const onCanPlay = () => {
+        audio.removeEventListener("canplay", onCanPlay);
+        try {
+          audio.currentTime = currentPos;
+        } catch (e) {
+          console.warn("Could not seek after quality switch:", e);
+        }
+        if (wasPlaying) {
+          audio.play().catch(() => {});
+        }
+      };
+
+      audio.addEventListener("canplay", onCanPlay, { once: true });
+      audio.src = targetUrl;
+      audio.load();
+
+      // Probe headers to immediately reflect real stream telemetry
+      fetch(targetUrl, { method: "HEAD" })
+        .then((res) => {
+          const liveSource = res.headers.get("x-audio-source");
+          const liveFormat = res.headers.get("x-audio-format");
+          const liveBitDepth = res.headers.get("x-audio-bit-depth");
+          const liveSampleRate = res.headers.get("x-audio-sample-rate");
+          const liveBitrate = res.headers.get("x-audio-bitrate");
+          const liveIsLossless = res.headers.get("x-audio-is-lossless");
+
+          if (liveSource || liveFormat) {
+            setCurrentTrack((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                streamUrl: targetUrl,
+                source: liveSource || prev.source,
+                format: liveFormat || prev.format,
+                bitDepth: liveBitDepth ? parseInt(liveBitDepth, 10) : prev.bitDepth,
+                sampleRate: liveSampleRate ? parseInt(liveSampleRate, 10) : prev.sampleRate,
+                bitrate: liveBitrate ? parseInt(liveBitrate, 10) : prev.bitrate,
+                hires: liveIsLossless !== null ? liveIsLossless === "true" : prev.hires,
+              };
+            });
+          }
+        })
+        .catch(() => {});
+    },
+    [currentTrack, isPlaying, setStreamQuality]
   );
 
   // Audiophile micro-fade toggle play
@@ -1479,6 +1585,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         getFrequencyData,
         getTimeDomainData,
         getLiveTelemetry,
+        streamQuality,
+        setStreamQuality,
+        switchStreamQuality,
       }}
     >
       {children}

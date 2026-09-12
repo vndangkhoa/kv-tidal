@@ -15,6 +15,7 @@ pub struct StreamRequest {
     pub id: Option<String>,
     pub url: Option<String>,
     pub path: Option<String>,
+    pub format: Option<String>,
 }
 
 fn find_ffmpeg() -> Option<PathBuf> {
@@ -87,45 +88,58 @@ async fn handle_stream(
 ) -> Response {
     let artist = query.artist.as_deref().unwrap_or("").trim();
     let title = query.title.as_deref().unwrap_or("").trim();
+    let force_opus = query
+        .format
+        .as_deref()
+        .map(|f| f.eq_ignore_ascii_case("opus"))
+        .unwrap_or(false);
 
-    // 1. Check if track already exists in local NAS library (by path, ID, or artist & title)
-    let local_track = {
-        let lib = state.library.read().await;
-        if let Some(path_str) = &query.path {
-            let p = PathBuf::from(path_str);
-            lib.tracks.values().find(|t| t.file_path == p).cloned().or_else(|| {
-                if p.exists() && p.is_file() {
-                    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                    let is_dsd = ext == "dsf" || ext == "dff";
-                    let id = format!("{:x}", md5::compute(p.to_string_lossy().as_bytes()));
-                    Some(crate::storage::scanner::LibraryTrack {
-                        id,
-                        title: query.title.clone().unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
-                        artist: query.artist.clone().unwrap_or_else(|| "Synology NAS Vault".to_string()),
-                        album: "Lossless Storage".to_string(),
-                        duration: 0,
-                        track_number: 1,
-                        file_path: p,
-                        format: ext,
-                        bit_depth: if is_dsd { Some(1) } else { Some(24) },
-                        sample_rate: if is_dsd { Some(2822400) } else { Some(96000) },
-                        bitrate: if is_dsd { Some(5644) } else { Some(2400) },
-                        channels: Some(2),
-                        year: None,
-                        dr_score: Some(13),
-                        hires: true,
-                        is_dsd,
-                    })
+    if !force_opus {
+        // 1. Check if track already exists in local NAS library (by path, ID, or artist & title)
+        let mut local_track = {
+            let lib = state.library.read().await;
+            if let Some(path_str) = &query.path {
+                let p = PathBuf::from(path_str);
+                lib.tracks.values().find(|t| t.file_path == p).cloned().or_else(|| {
+                    if p.exists() && p.is_file() {
+                        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                        let is_dsd = ext == "dsf" || ext == "dff";
+                        let id = format!("{:x}", md5::compute(p.to_string_lossy().as_bytes()));
+                        Some(crate::storage::scanner::LibraryTrack {
+                            id,
+                            title: query.title.clone().unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
+                            artist: query.artist.clone().unwrap_or_else(|| "Synology NAS Vault".to_string()),
+                            album: "Lossless Storage".to_string(),
+                            duration: 0,
+                            track_number: 1,
+                            file_path: p,
+                            format: ext,
+                            bit_depth: if is_dsd { Some(1) } else { Some(24) },
+                            sample_rate: if is_dsd { Some(2822400) } else { Some(96000) },
+                            bitrate: if is_dsd { Some(5644) } else { Some(2400) },
+                            channels: Some(2),
+                            year: None,
+                            dr_score: Some(13),
+                            hires: true,
+                            is_dsd,
+                        })
+                    } else {
+                        None
+                    }
+                })
+            } else if let Some(id) = &query.id {
+                if id.starts_with('/') {
+                    let p = PathBuf::from(id);
+                    lib.tracks.values().find(|t| t.file_path == p).cloned()
+                } else if let Some(t) = lib.tracks.get(id) {
+                    Some(t.clone())
+                } else if !artist.is_empty() && !title.is_empty() {
+                    lib.tracks.values().find(|t| {
+                        t.artist.eq_ignore_ascii_case(artist) && t.title.eq_ignore_ascii_case(title)
+                    }).cloned()
                 } else {
                     None
                 }
-            })
-        } else if let Some(id) = &query.id {
-            if id.starts_with('/') {
-                let p = PathBuf::from(id);
-                lib.tracks.values().find(|t| t.file_path == p).cloned()
-            } else if let Some(t) = lib.tracks.get(id) {
-                Some(t.clone())
             } else if !artist.is_empty() && !title.is_empty() {
                 lib.tracks.values().find(|t| {
                     t.artist.eq_ignore_ascii_case(artist) && t.title.eq_ignore_ascii_case(title)
@@ -133,14 +147,87 @@ async fn handle_stream(
             } else {
                 None
             }
-        } else if !artist.is_empty() && !title.is_empty() {
-            lib.tracks.values().find(|t| {
-                t.artist.eq_ignore_ascii_case(artist) && t.title.eq_ignore_ascii_case(title)
-            }).cloned()
-        } else {
-            None
+        };
+
+        // Quick fallback check on disk in download/library directories if not yet indexed in memory
+        if local_track.is_none() && !title.is_empty() {
+            let target_dir = {
+                let cfg = state.config.read().await;
+                cfg.download_dir.clone()
+            };
+            let search_dir = PathBuf::from(&target_dir);
+            if search_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&search_dir) {
+                    let title_lower = title.to_lowercase();
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                                for sub_entry in sub_entries.flatten() {
+                                    let sub_path = sub_entry.path();
+                                    if sub_path.is_file() {
+                                        let ext = sub_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                                        if ext == "flac" {
+                                            let file_name = sub_path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                                            if file_name.contains(&title_lower) {
+                                                local_track = Some(crate::storage::scanner::LibraryTrack {
+                                                    id: format!("{:x}", md5::compute(sub_path.to_string_lossy().as_bytes())),
+                                                    title: title.to_string(),
+                                                    artist: artist.to_string(),
+                                                    album: "Lossless Storage".to_string(),
+                                                    duration: 0,
+                                                    track_number: 1,
+                                                    file_path: sub_path,
+                                                    format: "flac".to_string(),
+                                                    bit_depth: Some(24),
+                                                    sample_rate: Some(44100),
+                                                    bitrate: Some(1411),
+                                                    channels: Some(2),
+                                                    year: None,
+                                                    dr_score: Some(12),
+                                                    hires: true,
+                                                    is_dsd: false,
+                                                });
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if path.is_file() {
+                            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                            if ext == "flac" {
+                                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                                if file_name.contains(&title_lower) {
+                                    local_track = Some(crate::storage::scanner::LibraryTrack {
+                                        id: format!("{:x}", md5::compute(path.to_string_lossy().as_bytes())),
+                                        title: title.to_string(),
+                                        artist: artist.to_string(),
+                                        album: "Lossless Storage".to_string(),
+                                        duration: 0,
+                                        track_number: 1,
+                                        file_path: path,
+                                        format: "flac".to_string(),
+                                        bit_depth: Some(24),
+                                        sample_rate: Some(44100),
+                                        bitrate: Some(1411),
+                                        channels: Some(2),
+                                        year: None,
+                                        dr_score: Some(12),
+                                        hires: true,
+                                        is_dsd: false,
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                        if local_track.is_some() {
+                            break;
+                        }
+                    }
+                }
+            }
         }
-    };
 
     if let Some(track) = local_track {
         // Ensure file exists and is not 0 bytes (corrupted download)
@@ -315,6 +402,7 @@ async fn handle_stream(
                 ).await;
             }
         }
+    }
     }
 
     // 2. Resolve 100% full-length song stream (Invidious / yt-dlp)

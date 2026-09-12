@@ -66,6 +66,8 @@ export function AudioPlayer() {
     suggestedTracks,
     queue,
     currentIndex,
+    streamQuality,
+    switchStreamQuality,
   } = usePlayer();
 
   const [isLiked, setIsLiked] = useState(false);
@@ -335,6 +337,32 @@ export function AudioPlayer() {
 
         {/* Right Zone: Audiophile MAX Badge, Tools & Padlocked Bit-Perfect Volume */}
         <div className="flex items-center justify-end space-x-2 w-1/4">
+          {/* Instant Seamless Audio Quality Switcher (FLAC vs OPUS) */}
+          <div className="flex items-center bg-card/80 border border-border/80 rounded-lg p-0.5 text-[10px] font-mono font-bold select-none">
+            <button
+              onClick={() => switchStreamQuality("flac")}
+              title="Switch instantly to FLAC (Bit-Perfect Lossless Master)"
+              className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                streamQuality === "flac"
+                  ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 shadow-sm"
+                  : "text-textSecondary hover:text-white"
+              }`}
+            >
+              FLAC
+            </button>
+            <button
+              onClick={() => switchStreamQuality("opus")}
+              title="Switch instantly to OPUS (Fast 160kbps Web Stream)"
+              className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                streamQuality === "opus"
+                  ? "bg-amber-500/25 text-amber-300 border border-amber-500/40 shadow-sm"
+                  : "text-textSecondary hover:text-white"
+              }`}
+            >
+              OPUS
+            </button>
+          </div>
+
           {/* Transparent Audiophile Quality Badge Pill */}
           <button
             onClick={() => setIsSignalPathOpen(true)}
@@ -649,9 +677,33 @@ export function AudioPlayer() {
             <div className="min-w-0 flex-1 pr-4">
               <h2 className="text-xl font-bold text-white truncate">{currentTrack.title}</h2>
               <p className="text-sm text-textSecondary truncate mt-0.5">{currentTrack.artist}</p>
-              <p className="text-[11px] font-mono text-textSecondary/70 mt-1">
-                {formatName} • {bitDepth}-bit / {sampleRateKhz} kHz • DR{currentTrack.drScore || 12}
-              </p>
+              <div className="flex items-center space-x-2.5 mt-1.5">
+                <span className="text-[11px] font-mono text-textSecondary/70">
+                  {formatName} • {bitDepth}-bit / {sampleRateKhz} kHz • DR{currentTrack.drScore || 12}
+                </span>
+                <div className="flex items-center bg-card border border-border rounded-lg p-0.5 text-[9px] font-mono font-bold">
+                  <button
+                    onClick={() => switchStreamQuality("flac")}
+                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                      streamQuality === "flac"
+                        ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/40"
+                        : "text-textSecondary"
+                    }`}
+                  >
+                    FLAC
+                  </button>
+                  <button
+                    onClick={() => switchStreamQuality("opus")}
+                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                      streamQuality === "opus"
+                        ? "bg-amber-500/25 text-amber-300 border border-amber-500/40"
+                        : "text-textSecondary"
+                    }`}
+                  >
+                    OPUS
+                  </button>
+                </div>
+              </div>
             </div>
             <button
               onClick={() => setIsLiked(!isLiked)}

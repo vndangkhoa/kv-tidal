@@ -84,6 +84,14 @@ pub struct TransferRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct BatchTransferRequest {
+    pub action: String, // "cut" or "copy"
+    pub paths: Vec<String>,
+    pub destination_dir: String,
+    pub conflict_resolution: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct DownloadQuery {
     pub path: String,
 }
@@ -388,6 +396,200 @@ async fn transfer_file(
         "destination": dest.to_string_lossy()
     })))
 }
+
+fn generate_unique_path(parent: &Path, file_name: &str) -> PathBuf {
+    let target = parent.join(file_name);
+    if !target.exists() {
+        return target;
+    }
+
+    let p = Path::new(file_name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(file_name);
+    let ext = p.extension().and_then(|s| s.to_str());
+
+    let mut counter = 1;
+    loop {
+        let new_name = match ext {
+            Some(e) => format!("{} ({}).{}", stem, counter, e),
+            None => format!("{} ({})", stem, counter),
+        };
+        let candidate = parent.join(new_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
+async fn copy_dir_all(src: &Path, dst: &Path, puid: u32, pgid: u32) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(dst).await?;
+    ensure_dir_permissions(dst, puid, pgid);
+    let mut dir = tokio::fs::read_dir(src).await?;
+    while let Some(entry) = dir.next_entry().await? {
+        let entry_path = entry.path();
+        let target_path = dst.join(entry.file_name());
+        let meta = entry.metadata().await?;
+        if meta.is_dir() {
+            Box::pin(copy_dir_all(&entry_path, &target_path, puid, pgid)).await?;
+        } else {
+            tokio::fs::copy(&entry_path, &target_path).await?;
+            ensure_file_permissions(&target_path, puid, pgid);
+        }
+    }
+    Ok(())
+}
+
+async fn batch_transfer(
+    State(state): State<AppState>,
+    Json(payload): Json<BatchTransferRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let dest_dir = PathBuf::from(&payload.destination_dir);
+    if !dest_dir.exists() {
+        let _ = fs::create_dir_all(&dest_dir).await;
+    }
+
+    let (puid, pgid) = {
+        let cfg = state.config.read().await;
+        (cfg.puid, cfg.pgid)
+    };
+
+    let conflict_mode = payload
+        .conflict_resolution
+        .as_deref()
+        .unwrap_or("rename");
+
+    let is_cut = payload.action.to_lowercase() == "cut";
+    let mut transferred = Vec::new();
+    let mut errors = Vec::new();
+
+    for src_str in &payload.paths {
+        let src = PathBuf::from(src_str);
+        if !src.exists() {
+            errors.push(format!("Source path does not exist: {}", src_str));
+            continue;
+        }
+
+        let file_name = match src.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => {
+                errors.push(format!("Invalid file name for: {}", src_str));
+                continue;
+            }
+        };
+
+        let mut dest = dest_dir.join(&file_name);
+
+        // Don't copy/move a directory into itself or its own subdirectory
+        if src.is_dir() && dest_dir.starts_with(&src) {
+            errors.push(format!(
+                "Cannot move or copy folder '{}' into its own subdirectory",
+                file_name
+            ));
+            continue;
+        }
+
+        // If source and dest are the same directory
+        if let Some(src_parent) = src.parent() {
+            if src_parent == dest_dir && !is_cut && conflict_mode == "rename" {
+                dest = generate_unique_path(&dest_dir, &file_name);
+            } else if src_parent == dest_dir && is_cut {
+                // Moving into the exact same folder with same name is a no-op
+                transferred.push(dest.to_string_lossy().to_string());
+                continue;
+            }
+        }
+
+        if dest.exists() {
+            match conflict_mode {
+                "skip" => continue,
+                "rename" => {
+                    dest = generate_unique_path(&dest_dir, &file_name);
+                }
+                "overwrite" => {
+                    if dest.is_dir() {
+                        let _ = fs::remove_dir_all(&dest).await;
+                    } else {
+                        let _ = fs::remove_file(&dest).await;
+                    }
+                }
+                _ => {
+                    dest = generate_unique_path(&dest_dir, &file_name);
+                }
+            }
+        }
+
+        if is_cut {
+            // Attempt rename first
+            let rename_res = fs::rename(&src, &dest).await;
+            if rename_res.is_err() {
+                // Fallback for cross-device (EXDEV) links or other rename failures
+                if src.is_dir() {
+                    if let Err(e) = copy_dir_all(&src, &dest, puid, pgid).await {
+                        errors.push(format!("Failed to copy directory '{}': {}", file_name, e));
+                        continue;
+                    }
+                    if let Err(e) = fs::remove_dir_all(&src).await {
+                        errors.push(format!("Failed to clean up source directory '{}': {}", file_name, e));
+                    }
+                } else {
+                    if let Err(e) = fs::copy(&src, &dest).await {
+                        errors.push(format!("Failed to copy file '{}': {}", file_name, e));
+                        continue;
+                    }
+                    ensure_file_permissions(&dest, puid, pgid);
+                    if let Err(e) = fs::remove_file(&src).await {
+                        errors.push(format!("Failed to clean up source file '{}': {}", file_name, e));
+                    }
+                }
+            } else {
+                if dest.is_dir() {
+                    ensure_dir_permissions(&dest, puid, pgid);
+                } else {
+                    ensure_file_permissions(&dest, puid, pgid);
+                }
+            }
+
+            // Update in-memory library track paths
+            let mut lib_guard = state.library.write().await;
+            for track in lib_guard.tracks.values_mut() {
+                if track.file_path == src {
+                    track.file_path = dest.clone();
+                } else if track.file_path.starts_with(&src) {
+                    if let Ok(rel) = track.file_path.strip_prefix(&src) {
+                        track.file_path = dest.join(rel);
+                    }
+                }
+            }
+
+            transferred.push(dest.to_string_lossy().to_string());
+        } else {
+            // Copy operation
+            if src.is_dir() {
+                if let Err(e) = copy_dir_all(&src, &dest, puid, pgid).await {
+                    errors.push(format!("Failed to copy directory '{}': {}", file_name, e));
+                    continue;
+                }
+            } else {
+                if let Err(e) = fs::copy(&src, &dest).await {
+                    errors.push(format!("Failed to copy file '{}': {}", file_name, e));
+                    continue;
+                }
+                ensure_file_permissions(&dest, puid, pgid);
+            }
+            transferred.push(dest.to_string_lossy().to_string());
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": if errors.is_empty() { "ok" } else { "partial" },
+        "transferred_count": transferred.len(),
+        "transferred": transferred,
+        "errors": errors,
+        "destination": dest_dir.to_string_lossy(),
+        "action": payload.action,
+    })))
+}
+
 
 async fn create_directory(
     State(state): State<AppState>,
@@ -1168,4 +1370,5 @@ pub fn router() -> Router<AppState> {
         .route("/scan", post(scan_path))
         .route("/tags", axum::routing::put(update_tags))
         .route("/organize", post(organize_files))
+        .route("/batch-transfer", post(batch_transfer))
 }
