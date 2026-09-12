@@ -1,0 +1,6 @@
+#!/bin/sh
+PACKAGE="kvtidal"
+if [ -f "/var/packages/${PACKAGE}/scripts/start-stop-status" ]; then
+    /var/packages/${PACKAGE}/scripts/start-stop-status stop 2>/dev/null || true
+fi
+exit 0

@@ -1,0 +1,6 @@
+#!/bin/sh
+PACKAGE="kvtidal"
+if [ -f "/var/packages/${PACKAGE}/scripts/postinst" ]; then
+    /var/packages/${PACKAGE}/scripts/postinst
+fi
+exit 0

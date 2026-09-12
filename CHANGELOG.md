@@ -4,6 +4,11 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-8] - 2026-09-12
+
+### Added
+- **Upgrade Lifecycle Scripts**: Added `preupgrade`, `postupgrade`, and `preuninst` scripts to support seamless package upgrades directly through Synology Package Center without needing to uninstall first.
+
 ## [1.0.0-7] - 2026-09-12
 
 ### Added
