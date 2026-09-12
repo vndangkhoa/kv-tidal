@@ -4,6 +4,11 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-6] - 2026-09-12
+
+### Fixed
+- **Package Center URL**: Updated default `adminport` in `INFO` to `26784` and added automated synchronization in `postinst` and `start-stop-status` so Synology Package Center's "URL:" row matches the active service port.
+
 ## [1.0.0-5] - 2026-09-12
 
 ### Changed

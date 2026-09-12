@@ -15,11 +15,16 @@ start_daemon() {
     export WEB_DIR="${INSTALL_DIR}/web"
     export RUST_LOG="info"
 
-    # Synchronize DSM UI launcher port with actual configured port
-    if [ -f "$CONFIG_PATH" ] && [ -f "${INSTALL_DIR}/ui/config" ]; then
+    # Synchronize DSM UI launcher port and INFO adminport with actual configured port
+    if [ -f "$CONFIG_PATH" ]; then
         CFG_PORT="$(grep -oE '"port":[[:space:]]*[0-9]+' "$CONFIG_PATH" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')"
         if [ -n "$CFG_PORT" ]; then
-            sed -i -E "s|:[0-9]+/?\"|:${CFG_PORT}/\"|g" "${INSTALL_DIR}/ui/config"
+            if [ -f "${INSTALL_DIR}/ui/config" ]; then
+                sed -i -E "s|:[0-9]+/?\"|:${CFG_PORT}/\"|g" "${INSTALL_DIR}/ui/config"
+            fi
+            if [ -f "/var/packages/${PACKAGE}/INFO" ]; then
+                sed -i -E "s/^adminport=.*/adminport=\"${CFG_PORT}\"/" "/var/packages/${PACKAGE}/INFO"
+            fi
         fi
     fi
 
