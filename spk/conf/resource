@@ -1,5 +1,3 @@
 {
-  "port-config": {
-    "protocol-file": "conf/resource"
-  }
+  "systemd-unit": {}
 }

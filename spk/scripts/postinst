@@ -1,26 +1,27 @@
 #!/bin/sh
 PACKAGE="kvtidal"
+INSTALL_DIR="/var/packages/${PACKAGE}/target"
 ETC_DIR="/var/packages/${PACKAGE}/etc"
 VAR_DIR="/var/packages/${PACKAGE}/var"
 
 mkdir -p "$ETC_DIR" "$VAR_DIR"
 
-MUSIC_DIR="${SYNOPKG_PKG_VAR_music_dir:-/volume1/music}"
-PORT="${SYNOPKG_PKG_VAR_port:-8080}"
-SUB_USER="${SYNOPKG_PKG_VAR_subsonic_user:-admin}"
-SUB_PASS="${SYNOPKG_PKG_VAR_subsonic_pass:-admin}"
+MUSIC_DIR="${wizard_music_dir:-${SYNOPKG_PKG_VAR_wizard_music_dir:-${SYNOPKG_PKG_VAR_music_dir:-/volume1/music}}}"
+PORT="${wizard_port:-${SYNOPKG_PKG_VAR_wizard_port:-${SYNOPKG_PKG_VAR_port:-8080}}}"
+SUB_USER="${wizard_sub_user:-${SYNOPKG_PKG_VAR_wizard_sub_user:-${SYNOPKG_PKG_VAR_subsonic_user:-admin}}}"
+SUB_PASS="${wizard_sub_pass:-${SYNOPKG_PKG_VAR_wizard_sub_pass:-${SYNOPKG_PKG_VAR_subsonic_pass:-admin}}}"
 
 CONFIG_FILE="${ETC_DIR}/config.json"
 
 if [ ! -f "$CONFIG_FILE" ]; then
-cat <<EOF > "$CONFIG_FILE"
+cat > "$CONFIG_FILE" << CONFIG_EOF
 {
   "host": "0.0.0.0",
   "port": ${PORT},
   "puid": 1026,
   "pgid": 100,
   "data_dir": "${VAR_DIR}",
-  "web_dir": "/var/packages/${PACKAGE}/target/web",
+  "web_dir": "${INSTALL_DIR}/web",
   "subsonic_user": "${SUB_USER}",
   "subsonic_password": "${SUB_PASS}",
   "download_dir": "${MUSIC_DIR}",
@@ -33,10 +34,12 @@ cat <<EOF > "$CONFIG_FILE"
     }
   ]
 }
-EOF
+CONFIG_EOF
 fi
 
-# Ensure sc-kvtidal ownership of package data
+chmod +x "${INSTALL_DIR}/bin/kv-tidal" 2>/dev/null || true
+chmod 755 "/var/packages/${PACKAGE}/scripts/"* 2>/dev/null || true
+
 chown -R sc-kvtidal:synocache "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true
 chmod 775 "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true
 
