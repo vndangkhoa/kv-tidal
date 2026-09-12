@@ -185,73 +185,66 @@ Stored in `/var/packages/kvtidal/etc/config.json` (SPK) or `/data/config.json` (
 
 ## 🔄 Data Flow Architecture
 
-KV-Tidal is designed with a high-throughput, non-blocking asynchronous pipeline in Rust. Below are the key data flows for audio streaming, cover art discovery, and atomic downloading.
-
 ### 1. Audio Streaming Pipeline
 
 ```mermaid
-flowchart TD
-    Client["📱 Client (Web PWA / Subsonic Player)"] -->|GET /api/stream?id=...&artist=...&title=...| StreamHandler["⚡ KV-Tidal Stream Engine (Axum)"]
+flowchart LR
+    Client["📱 Client"] -->|Play| Router["⚡ KV-Tidal"]
 
-    subgraph Local_Flow["📁 Local NAS Music Playback"]
-        StreamHandler -->|Check Path / MD5 ID| LocalCheck{"Local File Exists?"}
-        LocalCheck -->|Yes| FormatCheck{"Format Type?"}
-        FormatCheck -->|DSD .dsf / .dff| Transcoder["🎛️ Real-Time DSD Transcoder<br/>(24-bit / 88.2 kHz FLAC decimation)"]
-        FormatCheck -->|FLAC / WAV / MP3 / AAC| DirectStream["Direct Bit-Perfect Stream"]
-        Transcoder --> Proxy["HTTP Range Stream Proxy<br/>(Status 206 Partial Content)"]
-        DirectStream --> Proxy
+    subgraph Local ["📁 Local NAS Library"]
+        Router -->|Local Track| Format{"Format?"}
+        Format -->|DSD .dsf/.dff| DSD["DSD Transcoder<br/>(24/88.2 FLAC)"]
+        Format -->|FLAC / WAV / MP3| Direct["Bit-Perfect"]
     end
 
-    subgraph Online_Flow["🌐 Online Multi-Tier Stream Resolver"]
-        LocalCheck -->|No| Resolver["Stream Resolver (Singleflight Deduplicator)"]
-        Resolver --> Tier1{"Tier 1: Local Invidious<br/>(127.0.0.1:7601 on NAS)"}
-        Tier1 -->|Hit ~10ms| CDN["Direct Opus / AAC Stream"]
-        Tier1 -->|Miss / Offline| Tier2{"Tier 2: Standalone yt-dlp<br/>(Custom TMPDIR on Volume)"}
-        Tier2 -->|Extracted| CDN
-        Tier2 -->|Fail| Tier3{"Tier 3: Public Invidious Grid<br/>(inv.tux.pizza, yewtu.be)"}
-        Tier3 -->|Resolved| CDN
-        CDN --> Proxy
+    subgraph Online ["🌐 Multi-Tier Online Resolver"]
+        Router -->|Online Track| Resolver["Resolver"]
+        Resolver -->|Tier 1 (~10ms)| Inv["Local Invidious (:7601)"]
+        Resolver -->|Tier 2| Yt["Bundled yt-dlp"]
+        Resolver -->|Tier 3| Mesh["Public Invidious Grid"]
     end
 
-    Proxy -->|Chunked Audio Buffer (Range: bytes=...)| Client
+    DSD --> Proxy["🔊 HTTP Range Stream Proxy"]
+    Direct --> Proxy
+    Inv --> Proxy
+    Yt --> Proxy
+    Mesh --> Proxy
+    Proxy -->|Audio Buffer| Client
 ```
 
 ---
 
-### 2. Multi-Tier Artwork Discovery Flow
+### 2. Cover Art Discovery Flow
 
 ```mermaid
-flowchart TD
-    Req["🖼️ Artwork Request (/api/fs/cover or /rest/getCoverArt)"] --> CacheCheck{"1. Disk Cache Hit?<br/>(${DATA_DIR}/covers/)"}
-    CacheCheck -->|Yes| Serve["Serve Image (HTTP 200, max-age: 86400)"]
+flowchart LR
+    Req["🖼️ Cover Request"] --> Cache{"Cache Hit?"}
+    Cache -->|Yes| Out["Serve Image"]
+    Cache -->|No| Search["Artwork Finder"]
     
-    CacheCheck -->|No| Sidecar{"2. Sidecar Image in Folder?<br/>(folder.jpg, cover.jpg, front.png)"}
-    Sidecar -->|Found| SaveDisk["Persist to Disk Cache"]
+    Search --> S1["1. Sidecar (folder.jpg)"]
+    Search --> S2["2. Multi-Disc Walk (CD1/CD2)"]
+    Search --> S3["3. Embedded Tag (lofty)"]
+    Search --> S4["4. Apple Music CDN"]
     
-    Sidecar -->|Not Found| ParentWalk{"3. Multi-Disc Parent Walk?<br/>(CD1, CD2, Mat A, Mat B)"}
-    ParentWalk -->|Found| SaveDisk
-    
-    ParentWalk -->|Not Found| EmbeddedTag{"4. Embedded Tag in Audio File?<br/>(lofty ID3v2 / Vorbis / MP4 cover)"}
-    EmbeddedTag -->|Extracted| SaveDisk
-    
-    EmbeddedTag -->|Not Found| AppleCDN{"5. Online Apple Music CDN<br/>(High-Res 1000x1000 artwork)"}
-    AppleCDN -->|Downloaded| SaveDisk
-    
-    SaveDisk --> Serve
+    S1 --> Disk["Save to Cache"]
+    S2 --> Disk
+    S3 --> Disk
+    S4 --> Disk
+    Disk --> Out
 ```
 
 ---
 
 ### 3. Atomic Lossless Download Flow
 
-```
-[User Trigger] ──► [Stream Resolver] ──► [Write to /volume2/music/.part]
-                                                        │
-                                                        ▼
-[OpenSubsonic Sync] ◄── [inotify Event] ◄── [Atomic Rename to {Artist}/{Album}/{Track} - {Title}.flac]
-                                                        ▲
-                                                        │
-                                         [lofty Tagging & Artwork Embedding]
+```mermaid
+flowchart LR
+    Start["⬇️ Download Request"] --> Stream["Resolve Stream"]
+    Stream --> Part["Write to .part File"]
+    Part --> Tag["Tag & Embed Artwork"]
+    Tag --> Move["Atomic Move to /volume2/music"]
+    Move --> Inotify["inotify Auto-Sync"]
 ```
 
 ---
