@@ -199,7 +199,7 @@ flowchart LR
 
     subgraph Online ["🌐 Multi-Tier Online Resolver"]
         Router -->|Online Track| Resolver["Resolver"]
-        Resolver -->|Tier 1 (~10ms)| Inv["Local Invidious (:7601)"]
+        Resolver -->|"Tier 1 (~10ms)"| Inv["Local Invidious (:7601)"]
         Resolver -->|Tier 2| Yt["Bundled yt-dlp"]
         Resolver -->|Tier 3| Mesh["Public Invidious Grid"]
     end
