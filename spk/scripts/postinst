@@ -121,8 +121,21 @@ SLSKD_CFG="${SLSKD_DIR}/slskd.yml"
 EXISTING_USER=""
 EXISTING_PASS=""
 if [ -f "/volume2/docker/slskd/slskd.yml" ]; then
-    EXISTING_USER="$(grep -E '^[[:space:]]*username:[[:space:]]*[^~[:space:]]+' "/volume2/docker/slskd/slskd.yml" | awk '{print $2}' | tr -d ' "' | head -n 1)"
-    EXISTING_PASS="$(grep -E '^[[:space:]]*password:[[:space:]]*[^~[:space:]]+' "/volume2/docker/slskd/slskd.yml" | awk '{print $2}' | tr -d ' "' | head -n 1)"
+    EXISTING_USER="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+    EXISTING_PASS="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+fi
+if [ -z "$EXISTING_PASS" ] && [ -f "$SLSKD_CFG" ]; then
+    EXISTING_PASS="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+fi
+if [ -z "$EXISTING_USER" ] && [ -f "$SLSKD_CFG" ]; then
+    EXISTING_USER="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+fi
+
+if [ -n "$EXISTING_PASS" ] && [ -f "$CONFIG_FILE" ]; then
+    sed -i -E "s/\"soulseek_password\":[[:space:]]*null/\"soulseek_password\": \"${EXISTING_PASS}\"/" "$CONFIG_FILE"
+fi
+if [ -n "$EXISTING_USER" ] && [ -f "$CONFIG_FILE" ]; then
+    sed -i -E "s/\"soulseek_username\":[[:space:]]*null/\"soulseek_username\": \"${EXISTING_USER}\"/" "$CONFIG_FILE"
 fi
 
 if [ ! -f "$SLSKD_CFG" ]; then
@@ -136,6 +149,10 @@ directories:
   downloads: "${MUSIC_DIR}"
   incomplete: "${SLSKD_DIR}/incomplete"
 
+shares:
+  directories:
+    - "${MUSIC_DIR}"
+
 soulseek:
   username: "${EXISTING_USER}"
   password: "${EXISTING_PASS}"
@@ -145,6 +162,14 @@ SLSKD_EOF
 else
   if [ -n "$MUSIC_DIR" ]; then
     sed -i -E "s|downloads:.*|downloads: \"${MUSIC_DIR}\"|" "$SLSKD_CFG"
+  fi
+  if ! grep -q "shares:" "$SLSKD_CFG"; then
+    cat >> "$SLSKD_CFG" << SHARES_EOF
+
+shares:
+  directories:
+    - "${MUSIC_DIR}"
+SHARES_EOF
   fi
   if [ -n "$EXISTING_USER" ] && ! grep -q "username: [a-zA-Z0-9]" "$SLSKD_CFG"; then
     sed -i -E "s|username:.*|username: \"${EXISTING_USER}\"|" "$SLSKD_CFG"

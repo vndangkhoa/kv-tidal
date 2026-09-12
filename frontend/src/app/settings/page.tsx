@@ -21,6 +21,8 @@ import {
   Clock,
   Sparkles,
   Lock,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { usePlayer } from "@/context/PlayerContext";
 
@@ -89,6 +91,10 @@ export default function SettingsPage() {
   const [soulseekUrl, setSoulseekUrl] = useState("http://127.0.0.1:5030");
   const [soulseekApiKey, setSoulseekApiKey] = useState("");
   const [soulseekHasApiKey, setSoulseekHasApiKey] = useState(false);
+  const [soulseekUsername, setSoulseekUsername] = useState("");
+  const [soulseekPassword, setSoulseekPassword] = useState("");
+  const [soulseekHasPassword, setSoulseekHasPassword] = useState(false);
+  const [showSoulseekPassword, setShowSoulseekPassword] = useState(false);
   const [testingSoulseek, setTestingSoulseek] = useState(false);
   const [soulseekStatusMsg, setSoulseekStatusMsg] = useState<{ success: boolean; text: string; version?: string } | null>(null);
 
@@ -111,7 +117,21 @@ export default function SettingsPage() {
         setSoulseekEnabled(sdata.soulseek_enabled);
         setSoulseekUrl(sdata.soulseek_url || "http://127.0.0.1:5030");
         setSoulseekHasApiKey(sdata.soulseek_has_api_key);
+        if (sdata.soulseek_username) setSoulseekUsername(sdata.soulseek_username);
+        setSoulseekHasPassword(!!sdata.soulseek_has_password);
       }
+
+      // Automatically check live Soulseek P2P connection
+      fetch("/api/settings/test-soulseek", { method: "POST" })
+        .then((r) => r.json())
+        .then((testData) => {
+          setSoulseekStatusMsg({
+            success: testData.success,
+            text: testData.message,
+            version: testData.version,
+          });
+        })
+        .catch(() => {});
     } catch (e) {
       console.error(e);
     }
@@ -160,6 +180,8 @@ export default function SettingsPage() {
           soulseek_enabled: soulseekEnabled,
           soulseek_url: soulseekUrl,
           soulseek_api_key: soulseekApiKey ? soulseekApiKey : undefined,
+          soulseek_username: soulseekUsername ? soulseekUsername : undefined,
+          soulseek_password: soulseekPassword ? soulseekPassword : undefined,
         }),
       });
       if (resp.ok) {
@@ -172,6 +194,7 @@ export default function SettingsPage() {
         });
         fetchSettings();
         setSoulseekApiKey("");
+        setSoulseekPassword("");
       }
     } catch (e: any) {
       setSoulseekStatusMsg({ success: false, text: e.message || "Failed saving Soulseek settings" });
@@ -775,6 +798,43 @@ export default function SettingsPage() {
                 placeholder={soulseekHasApiKey ? "•••••••• (configured)" : "Leave blank if no auth"}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
               />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-textSecondary">Soulseek Account Username</label>
+              <input
+                type="text"
+                value={soulseekUsername}
+                onChange={(e) => setSoulseekUsername(e.target.value)}
+                placeholder="e.g. khoavo_nas"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-textSecondary">Soulseek Account Password</label>
+                {soulseekHasPassword && !soulseekPassword && (
+                  <span className="text-[10px] text-emerald-400 font-mono">Configured</span>
+                )}
+              </div>
+              <div className="relative">
+                <input
+                  type={showSoulseekPassword ? "text" : "password"}
+                  value={soulseekPassword}
+                  onChange={(e) => setSoulseekPassword(e.target.value)}
+                  placeholder={soulseekHasPassword ? "•••••••• (leave blank to keep)" : "Enter Soulseek password"}
+                  className="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowSoulseekPassword(!showSoulseekPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-textSecondary hover:text-white transition-colors cursor-pointer"
+                >
+                  {showSoulseekPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
             </div>
           </div>
 

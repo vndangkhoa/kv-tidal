@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoulseekTrackCandidate {
@@ -19,6 +19,7 @@ pub struct SoulseekTrackCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoulseekStatus {
     pub connected: bool,
+    pub is_logged_in: bool,
     pub server_version: Option<String>,
     pub error: Option<String>,
 }
@@ -74,6 +75,7 @@ impl SoulseekEngine {
         if !enabled {
             return SoulseekStatus {
                 connected: false,
+                is_logged_in: false,
                 server_version: None,
                 error: Some("Soulseek engine is disabled in settings".to_string()),
             };
@@ -85,51 +87,92 @@ impl SoulseekEngine {
         match self.client.get(&endpoint).headers(headers).send().await {
             Ok(resp) if resp.status().is_success() => {
                 let json: serde_json::Value = resp.json().await.unwrap_or_default();
-                let version = json.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
-                SoulseekStatus {
-                    connected: true,
-                    server_version: version.or(Some("slskd active".to_string())),
-                    error: None,
+                let version_str = json
+                    .get("version")
+                    .and_then(|v| {
+                        if let Some(cur) = v.get("current").and_then(|c| c.as_str()) {
+                            Some(cur)
+                        } else if let Some(f) = v.get("full").and_then(|f| f.as_str()) {
+                            Some(f)
+                        } else {
+                            v.as_str()
+                        }
+                    })
+                    .unwrap_or("0.26.0");
+
+                let server_obj = json.get("server");
+                let is_logged_in = server_obj
+                    .and_then(|s| s.get("isLoggedIn"))
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false);
+                let is_connected = server_obj
+                    .and_then(|s| s.get("isConnected"))
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false);
+                let server_state = server_obj
+                    .and_then(|s| s.get("state"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("Unknown");
+
+                let username = json
+                    .get("user")
+                    .and_then(|u| u.get("username"))
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("");
+
+                if is_logged_in {
+                    SoulseekStatus {
+                        connected: true,
+                        is_logged_in: true,
+                        server_version: Some(format!("slskd v{} (Logged In as {})", version_str, username)),
+                        error: None,
+                    }
+                } else if is_connected {
+                    SoulseekStatus {
+                        connected: true,
+                        is_logged_in: false,
+                        server_version: Some(format!("slskd v{} (Logging In...)", version_str)),
+                        error: Some("Connected to Soulseek server, awaiting authentication".to_string()),
+                    }
+                } else {
+                    SoulseekStatus {
+                        connected: false,
+                        is_logged_in: false,
+                        server_version: Some(format!("slskd v{}", version_str)),
+                        error: Some(format!(
+                            "slskd running, but Disconnected from Soulseek network ({}) — please verify username/password in Settings",
+                            server_state
+                        )),
+                    }
                 }
             }
             Ok(resp) => SoulseekStatus {
                 connected: false,
+                is_logged_in: false,
                 server_version: None,
                 error: Some(format!("slskd responded with HTTP {}", resp.status())),
             },
             Err(e) => SoulseekStatus {
                 connected: false,
+                is_logged_in: false,
                 server_version: None,
                 error: Some(format!("Cannot connect to slskd at {}: {}", base_url, e)),
             },
         }
     }
 
-    /// Search slskd for authentic FLAC files matching artist and title
-    pub async fn search_flac(
+    /// Helper to execute a single search query against slskd and collect FLAC candidates
+    async fn execute_slskd_query(
         &self,
-        artist: &str,
-        title: &str,
+        base_url: &str,
+        headers: &reqwest::header::HeaderMap,
+        query: &str,
+        artist_filter: Option<&str>,
     ) -> Result<Vec<SoulseekTrackCandidate>, String> {
-        let (base_url, api_key, enabled) = {
-            let cfg = self.config.read().await;
-            (cfg.soulseek_url.clone(), cfg.soulseek_api_key.clone(), cfg.soulseek_enabled)
-        };
-
-        if !enabled {
-            return Err("Soulseek engine is disabled in settings".to_string());
-        }
-
-        let clean_artist = artist.replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
-        let clean_title = title.replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
-        let search_text = format!("{} {} flac", clean_artist.trim(), clean_title.trim());
-
         let create_url = format!("{}/api/v0/searches", base_url.trim_end_matches('/'));
-        let headers = self.build_headers(api_key.as_deref());
-
         let payload = serde_json::json!({
-            "searchText": search_text,
-            "minimumUploadSpeed": 50000,
+            "searchText": query,
+            "minimumUploadSpeed": 0,
         });
 
         let resp = self
@@ -156,13 +199,13 @@ impl SoulseekEngine {
             .ok_or_else(|| "slskd search response missing id".to_string())?
             .to_string();
 
-        info!("Initiated slskd search ID: {} for '{}'", search_id, search_text);
+        info!("Initiated slskd search ID: {} for '{}'", search_id, query);
 
-        // Poll search results for up to 6 seconds to gather high-quality responses
         let poll_url = format!("{}/api/v0/searches/{}/responses", base_url.trim_end_matches('/'), search_id);
         let mut candidates = Vec::new();
+        let filter_lower = artist_filter.map(|a| a.to_lowercase());
 
-        for _ in 0..6 {
+        for _ in 0..5 {
             tokio::time::sleep(Duration::from_millis(1000)).await;
             if let Ok(resp) = self.client.get(&poll_url).headers(headers.clone()).send().await {
                 if let Ok(data) = resp.json::<serde_json::Value>().await {
@@ -201,6 +244,13 @@ impl SoulseekEngine {
                                         continue;
                                     }
 
+                                    // If artist filter is active (e.g. during server keyword bypass), ensure path matches artist
+                                    if let Some(ref artist_req) = filter_lower {
+                                        if !lower.contains(artist_req) {
+                                            continue;
+                                        }
+                                    }
+
                                     let is_locked = file
                                         .get("isLocked")
                                         .or_else(|| file.get("locked"))
@@ -237,8 +287,64 @@ impl SoulseekEngine {
                 }
             }
 
-            if candidates.len() >= 3 {
+            if candidates.len() >= 5 {
                 break;
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    /// Search slskd for authentic FLAC files matching artist and title (with multi-tier fallback)
+    pub async fn search_flac(
+        &self,
+        artist: &str,
+        title: &str,
+    ) -> Result<Vec<SoulseekTrackCandidate>, String> {
+        let (base_url, api_key, enabled) = {
+            let cfg = self.config.read().await;
+            (cfg.soulseek_url.clone(), cfg.soulseek_api_key.clone(), cfg.soulseek_enabled)
+        };
+
+        if !enabled {
+            return Err("Soulseek engine is disabled in settings".to_string());
+        }
+
+        let headers = self.build_headers(api_key.as_deref());
+
+        let clean_artist = artist.replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
+        let clean_title = title.replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
+
+        // Primary Tier 1: Search "{Artist} {Title} flac"
+        let q1 = format!("{} {} flac", clean_artist.trim(), clean_title.trim());
+        let mut candidates = match self.execute_slskd_query(&base_url, &headers, &q1, None).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Soulseek primary search query '{}' failed: {}", q1, e);
+                Vec::new()
+            }
+        };
+
+        // Fallback Tier 2: If no candidates found (e.g. artist blocked by Soulseek central server DMCA filter),
+        // search "{Title} flac" and filter results to ensure path matches artist name
+        if candidates.is_empty() && !clean_title.trim().is_empty() {
+            let q2 = format!("{} flac", clean_title.trim());
+            info!(
+                "Primary Soulseek query yielded 0 results; executing server-filter bypass query: '{}' with artist filter '{}'",
+                q2,
+                clean_artist.trim()
+            );
+            if let Ok(c) = self.execute_slskd_query(&base_url, &headers, &q2, Some(clean_artist.trim())).await {
+                candidates = c;
+            }
+        }
+
+        // Fallback Tier 3: Search "{Artist} {Title}" without "flac" keyword (still client-filtering for .flac)
+        if candidates.is_empty() && !clean_artist.trim().is_empty() && !clean_title.trim().is_empty() {
+            let q3 = format!("{} {}", clean_artist.trim(), clean_title.trim());
+            info!("Attempting Soulseek fallback query: '{}'", q3);
+            if let Ok(c) = self.execute_slskd_query(&base_url, &headers, &q3, None).await {
+                candidates = c;
             }
         }
 
@@ -635,6 +741,10 @@ r#"web:
 directories:
   downloads: "{d}"
   incomplete: "{inc}"
+
+shares:
+  directories:
+    - "{d}"
 
 soulseek:
   username: "{u}"

@@ -17,6 +17,7 @@ pub struct SettingsResponse {
     pub soulseek_url: String,
     pub soulseek_has_api_key: bool,
     pub soulseek_username: Option<String>,
+    pub soulseek_has_password: bool,
     pub subsonic_user: String,
     pub port: u16,
     pub download_dir: String,
@@ -53,6 +54,7 @@ async fn get_settings(State(state): State<AppState>) -> Json<SettingsResponse> {
     let tidal_has_token = cfg.tidal_access_token.as_ref().map(|t| !t.trim().is_empty()).unwrap_or(false);
     let tidal_token_masked = cfg.tidal_access_token.as_ref().filter(|t| !t.trim().is_empty()).map(|t| mask_token(t));
     let soulseek_has_api_key = cfg.soulseek_api_key.as_ref().map(|k| !k.trim().is_empty()).unwrap_or(false);
+    let soulseek_has_password = cfg.soulseek_password.as_ref().map(|p| !p.trim().is_empty()).unwrap_or(false);
 
     Json(SettingsResponse {
         tidal_has_token,
@@ -62,6 +64,7 @@ async fn get_settings(State(state): State<AppState>) -> Json<SettingsResponse> {
         soulseek_url: cfg.soulseek_url.clone(),
         soulseek_has_api_key,
         soulseek_username: cfg.soulseek_username.clone(),
+        soulseek_has_password,
         subsonic_user: cfg.subsonic_user.clone(),
         port: cfg.port,
         download_dir: cfg.download_dir.to_string_lossy().to_string(),
@@ -182,10 +185,16 @@ async fn test_soulseek_connection(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
     let status = state.soulseek.check_status().await;
-    if status.connected {
+    if status.connected && status.is_logged_in {
         Json(serde_json::json!({
             "success": true,
-            "message": "Connected to slskd successfully!",
+            "message": "Connected and Logged In to Soulseek P2P successfully!",
+            "version": status.server_version
+        }))
+    } else if status.connected {
+        Json(serde_json::json!({
+            "success": false,
+            "message": status.error.unwrap_or_else(|| "Connected to slskd, but not logged in to Soulseek network".to_string()),
             "version": status.server_version
         }))
     } else {

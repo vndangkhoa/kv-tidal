@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { usePlayer } from "@/context/PlayerContext";
 import {
   Play,
@@ -75,6 +75,24 @@ export function AudioPlayer() {
   const [isArtworkModalOpen, setIsArtworkModalOpen] = useState(false);
   const [isStudioToolsOpen, setIsStudioToolsOpen] = useState(false);
   const [timeMode, setTimeMode] = useState<"elapsed" | "remaining" | "frames">("elapsed");
+  const studioToolsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        studioToolsRef.current &&
+        !studioToolsRef.current.contains(event.target as Node)
+      ) {
+        setIsStudioToolsOpen(false);
+      }
+    }
+    if (isStudioToolsOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isStudioToolsOpen]);
 
   const { downloadTrack, getTrackDownloadStatus, setIsManagerOpen } = useDownloads();
 
@@ -431,7 +449,7 @@ export function AudioPlayer() {
           </div>
 
           {/* Studio Audio Suite (EQ, Spectrum Visualizer, VU Meters) */}
-          <div className="relative">
+          <div className="relative" ref={studioToolsRef}>
             <button
               onClick={() => setIsStudioToolsOpen(!isStudioToolsOpen)}
               title="Studio Audio Suite (Parametric EQ, Spectrum Visualizer, Analog VU Meters)"
@@ -445,81 +463,75 @@ export function AudioPlayer() {
             </button>
 
             {isStudioToolsOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-40"
-                  onClick={() => setIsStudioToolsOpen(false)}
-                />
-                <div className="absolute bottom-11 right-0 w-60 bg-surface/98 backdrop-blur-xl border border-border rounded-xl p-2 shadow-2xl z-50 space-y-1 animate-in fade-in zoom-in-95 duration-150 select-none">
-                  <div className="px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary border-b border-border/60 flex items-center justify-between">
-                    <span>Studio Audio Suite</span>
-                    <span className="text-primary text-[9px]">DSP & Meters</span>
-                  </div>
-
-                  {/* 1. Equalizer */}
-                  <button
-                    onClick={() => {
-                      setIsEqOpen(true);
-                      setIsStudioToolsOpen(false);
-                    }}
-                    className="w-full flex items-center space-x-2.5 px-2.5 py-2 rounded-lg hover:bg-card text-left transition-colors cursor-pointer group"
-                  >
-                    <div className="w-7 h-7 rounded-md bg-purple-500/15 text-purple-400 flex items-center justify-center border border-purple-500/30 flex-shrink-0">
-                      <Sliders className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs font-semibold text-white group-hover:text-primary transition-colors">
-                        Parametric Equalizer
-                      </div>
-                      <div className="text-[10px] text-textSecondary truncate">
-                        10-band studio EQ & AutoEQ
-                      </div>
-                    </div>
-                  </button>
-
-                  {/* 2. Spectrum Analyzer */}
-                  <button
-                    onClick={() => {
-                      setIsVisualizerOpen(true);
-                      setIsStudioToolsOpen(false);
-                    }}
-                    className="w-full flex items-center space-x-2.5 px-2.5 py-2 rounded-lg hover:bg-card text-left transition-colors cursor-pointer group"
-                  >
-                    <div className="w-7 h-7 rounded-md bg-cyan-500/15 text-cyan-400 flex items-center justify-center border border-cyan-500/30 flex-shrink-0">
-                      <Activity className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs font-semibold text-white group-hover:text-cyan-300 transition-colors">
-                        Spectrum Analyzer
-                      </div>
-                      <div className="text-[10px] text-textSecondary truncate">
-                        Real-time FFT audio visualizer
-                      </div>
-                    </div>
-                  </button>
-
-                  {/* 3. Ballistic VU Meters */}
-                  <button
-                    onClick={() => {
-                      setIsVuMeterOpen(true);
-                      setIsStudioToolsOpen(false);
-                    }}
-                    className="w-full flex items-center space-x-2.5 px-2.5 py-2 rounded-lg hover:bg-card text-left transition-colors cursor-pointer group"
-                  >
-                    <div className="w-7 h-7 rounded-md bg-amber-500/15 text-amber-400 flex items-center justify-center border border-amber-500/30 flex-shrink-0">
-                      <Gauge className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs font-semibold text-white group-hover:text-amber-300 transition-colors">
-                        Ballistic VU Meters
-                      </div>
-                      <div className="text-[10px] text-textSecondary truncate">
-                        Accuphase / McIntosh needles
-                      </div>
-                    </div>
-                  </button>
+              <div className="absolute bottom-full mb-3 right-0 w-64 bg-[#141414] border border-white/15 rounded-2xl p-2.5 shadow-[0_20px_50px_rgba(0,0,0,0.95)] z-50 space-y-1.5 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none">
+                <div className="px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary border-b border-white/10 flex items-center justify-between">
+                  <span>Studio Audio Suite</span>
+                  <span className="text-primary text-[9px] font-mono">DSP & METERS</span>
                 </div>
-              </>
+
+                {/* 1. Equalizer */}
+                <button
+                  onClick={() => {
+                    setIsEqOpen(true);
+                    setIsStudioToolsOpen(false);
+                  }}
+                  className="w-full flex items-center space-x-3 px-2.5 py-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] text-left transition-all cursor-pointer group border border-transparent hover:border-purple-500/30"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-purple-500/15 text-purple-400 flex items-center justify-center border border-purple-500/30 flex-shrink-0 group-hover:scale-105 transition-transform">
+                    <Sliders className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-white group-hover:text-purple-300 transition-colors">
+                      Parametric Equalizer
+                    </div>
+                    <div className="text-[10px] text-textSecondary truncate">
+                      10-band studio EQ & AutoEQ
+                    </div>
+                  </div>
+                </button>
+
+                {/* 2. Spectrum Analyzer */}
+                <button
+                  onClick={() => {
+                    setIsVisualizerOpen(true);
+                    setIsStudioToolsOpen(false);
+                  }}
+                  className="w-full flex items-center space-x-3 px-2.5 py-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] text-left transition-all cursor-pointer group border border-transparent hover:border-cyan-500/30"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-cyan-500/15 text-cyan-400 flex items-center justify-center border border-cyan-500/30 flex-shrink-0 group-hover:scale-105 transition-transform">
+                    <Activity className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-white group-hover:text-cyan-300 transition-colors">
+                      Spectrum Analyzer
+                    </div>
+                    <div className="text-[10px] text-textSecondary truncate">
+                      Real-time FFT audio visualizer
+                    </div>
+                  </div>
+                </button>
+
+                {/* 3. Ballistic VU Meters */}
+                <button
+                  onClick={() => {
+                    setIsVuMeterOpen(true);
+                    setIsStudioToolsOpen(false);
+                  }}
+                  className="w-full flex items-center space-x-3 px-2.5 py-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] text-left transition-all cursor-pointer group border border-transparent hover:border-amber-500/30"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center border border-amber-500/30 flex-shrink-0 group-hover:scale-105 transition-transform">
+                    <Gauge className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-white group-hover:text-amber-300 transition-colors">
+                      Ballistic VU Meters
+                    </div>
+                    <div className="text-[10px] text-textSecondary truncate">
+                      Accuphase / McIntosh needles
+                    </div>
+                  </div>
+                </button>
+              </div>
             )}
           </div>
 
