@@ -1,12 +1,30 @@
 use crate::config::LibraryConfig;
 use crate::state::AppState;
 use crate::storage::scanner::scan_directory;
-use axum::extract::State;
-use axum::response::Json;
+use axum::extract::{Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+fn ascii_case_insensitive_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut it_a = a.bytes().map(|b| b.to_ascii_lowercase());
+    let mut it_b = b.bytes().map(|b| b.to_ascii_lowercase());
+    loop {
+        match (it_a.next(), it_b.next()) {
+            (Some(x), Some(y)) => match x.cmp(&y) {
+                std::cmp::Ordering::Equal => continue,
+                other => return other,
+            },
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (None, None) => return std::cmp::Ordering::Equal,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct AddLibraryRequest {
@@ -43,11 +61,81 @@ async fn get_library_summary(State(state): State<AppState>) -> Json<serde_json::
     }))
 }
 
-async fn get_library_tracks(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let lib = state.library.read().await;
+async fn get_library_tracks(State(state): State<AppState>) -> Response {
+    // 1. Fast path: check pre-serialized JSON cache under read lock (<1ms response)
+    {
+        let lib = state.library.read().await;
+        if let Some(ref cached) = lib.cached_tracks_json {
+            return (
+                [
+                    (header::CONTENT_TYPE, "application/json"),
+                    (header::CACHE_CONTROL, "public, max-age=60"),
+                ],
+                cached.to_string(),
+            ).into_response();
+        }
+    }
+
+    // 2. Cache miss: sort without heap allocations and cache serialized JSON string
+    let mut lib = state.library.write().await;
+    if let Some(ref cached) = lib.cached_tracks_json {
+        return (
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "public, max-age=60"),
+            ],
+            cached.to_string(),
+        ).into_response();
+    }
+
     let mut tracks: Vec<_> = lib.tracks.values().cloned().collect();
-    tracks.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
-    Json(serde_json::json!({ "tracks": tracks }))
+    tracks.sort_by(|a, b| ascii_case_insensitive_cmp(&a.title, &b.title));
+    let json_str = serde_json::to_string(&serde_json::json!({ "tracks": tracks }))
+        .unwrap_or_else(|_| "{\"tracks\":[]}".to_string());
+    let arc_json = Arc::new(json_str);
+    lib.cached_tracks_json = Some(arc_json.clone());
+
+    (
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "public, max-age=60"),
+        ],
+        arc_json.to_string(),
+    ).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AlbumTracksQuery {
+    pub id: String,
+}
+
+async fn get_album_details(
+    Query(query): Query<AlbumTracksQuery>,
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let lib = state.library.read().await;
+    let clean_id = query.id.trim_start_matches("album-");
+    let album = lib.albums.values().find(|a| a.id == clean_id || a.id == query.id).cloned();
+
+    if let Some(alb) = album {
+        let mut tracks: Vec<_> = lib.tracks.values()
+            .filter(|t| t.album.eq_ignore_ascii_case(&alb.name) && (alb.artist.is_empty() || t.artist.eq_ignore_ascii_case(&alb.artist)))
+            .cloned()
+            .collect();
+        tracks.sort_by(|a, b| {
+            a.track_number.cmp(&b.track_number)
+                .then_with(|| ascii_case_insensitive_cmp(&a.title, &b.title))
+        });
+        return Json(serde_json::json!({
+            "album": alb,
+            "tracks": tracks
+        }));
+    }
+
+    Json(serde_json::json!({
+        "album": null,
+        "tracks": []
+    }))
 }
 
 async fn add_library_path(
@@ -96,6 +184,7 @@ async fn add_library_path(
         for ar in artists {
             store.artists.insert(ar.id.clone(), ar);
         }
+        store.cached_tracks_json = None;
     });
 
     Json(serde_json::json!({ "status": "ok", "message": "Library path added and scan initiated" }))
@@ -123,6 +212,7 @@ async fn trigger_rescan(State(state): State<AppState>) -> Json<serde_json::Value
         store.tracks.clear();
         store.albums.clear();
         store.artists.clear();
+        store.cached_tracks_json = None;
         for t in all_tracks {
             store.tracks.insert(t.id.clone(), t);
         }
@@ -141,6 +231,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(get_library_summary))
         .route("/tracks", get(get_library_tracks))
+        .route("/album", get(get_album_details))
         .route("/add", post(add_library_path))
         .route("/scan", post(trigger_rescan))
 }

@@ -22,14 +22,7 @@ if [ -d "$ROOT_DIR/spk/ui" ]; then
     cp -r "$ROOT_DIR/spk/ui/"* "$STAGE_DIR/package/ui/"
 fi
 
-if [ -f "$ROOT_DIR/backend/target/release/kv-tidal" ]; then
-    echo "Using freshly compiled Bookworm release binary from backend/target/release/kv-tidal..."
-    cp "$ROOT_DIR/backend/target/release/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
-    if [ -d "$ROOT_DIR/frontend/out" ]; then
-        echo "Using fresh frontend build from frontend/out..."
-        cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
-    fi
-elif docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then
+if docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then
     echo "Using Debian Bookworm (GLIBC 2.36 compatible) binary from docker image..."
     CID=$(docker create vndangkhoa/kv-tidal:latest)
     docker cp "$CID:/app/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
@@ -40,6 +33,13 @@ elif docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then
         docker cp "$CID:/app/web/." "$STAGE_DIR/package/web/"
     fi
     docker rm -f "$CID" >/dev/null
+elif [ -f "$ROOT_DIR/backend/target/release/kv-tidal" ]; then
+    echo "Using release binary from backend/target/release/kv-tidal..."
+    cp "$ROOT_DIR/backend/target/release/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
+    if [ -d "$ROOT_DIR/frontend/out" ]; then
+        echo "Using fresh frontend build from frontend/out..."
+        cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
+    fi
 else
     echo "Docker image not found, building frontend & backend on host..."
     cd "$ROOT_DIR/frontend"
@@ -50,7 +50,19 @@ else
     cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
 fi
 
-chmod +x "$STAGE_DIR/package/bin/kv-tidal"
+# Bundle standalone yt-dlp into package/bin
+if [ -x "/home/khoavo/.local/bin/yt-dlp" ]; then
+    echo "Bundling host yt-dlp into SPK package..."
+    cp "/home/khoavo/.local/bin/yt-dlp" "$STAGE_DIR/package/bin/yt-dlp"
+elif command -v yt-dlp >/dev/null 2>&1; then
+    echo "Bundling system yt-dlp into SPK package..."
+    cp "$(command -v yt-dlp)" "$STAGE_DIR/package/bin/yt-dlp"
+else
+    echo "Downloading standalone Linux x86_64 yt-dlp for SPK package..."
+    curl -sL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o "$STAGE_DIR/package/bin/yt-dlp"
+fi
+
+chmod +x "$STAGE_DIR/package/bin/"*
 
 echo "=== [2/4] Packaging package.tgz ==="
 cd "$STAGE_DIR/package"

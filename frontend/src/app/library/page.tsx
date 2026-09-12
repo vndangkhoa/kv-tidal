@@ -1,11 +1,14 @@
 "use client";
 
-import React, { useEffect, useState, Suspense } from "react";
+import React, { useEffect, useState, Suspense, useMemo, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
-import { LibraryAlbum, LibraryArtist, LibraryTrack, MappedFolder } from "@/types";
+import { LibraryAlbum, LibraryArtist, LibraryTrack, MappedFolder, PlayableTrack } from "@/types";
+import { usePlayer } from "@/context/PlayerContext";
 import { TrackRow } from "@/components/TrackRow";
 import { AlbumModal } from "@/components/AlbumModal";
 import { ArtistModal } from "@/components/ArtistModal";
+import { AlphabetScroller } from "@/components/AlphabetScroller";
+import { getSortLetter, buildLetterIndexMap } from "@/utils/alphabet";
 import {
   Library,
   RefreshCw,
@@ -13,6 +16,7 @@ import {
   Music2,
   Users,
   Disc,
+  Play,
   Sparkles,
   ShieldCheck,
   Award,
@@ -21,28 +25,72 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 
+interface LibraryCache {
+  albums: LibraryAlbum[];
+  artists: LibraryArtist[];
+  tracks: LibraryTrack[];
+  mappedFolders: MappedFolder[];
+  totalTracks: number;
+  totalHires: number;
+}
+
+let globalLibraryCache: LibraryCache | null = null;
+
 function LibraryContent() {
   const searchParams = useSearchParams();
   const tab = searchParams.get("tab");
 
-  const [albums, setAlbums] = useState<LibraryAlbum[]>([]);
-  const [artists, setArtists] = useState<LibraryArtist[]>([]);
-  const [tracks, setTracks] = useState<LibraryTrack[]>([]);
-  const [mappedFolders, setMappedFolders] = useState<MappedFolder[]>([]);
-  const [totalTracks, setTotalTracks] = useState<number>(0);
-  const [totalHires, setTotalHires] = useState<number>(0);
+  const [albums, setAlbums] = useState<LibraryAlbum[]>(() => globalLibraryCache?.albums || []);
+  const [artists, setArtists] = useState<LibraryArtist[]>(() => globalLibraryCache?.artists || []);
+  const [tracks, setTracks] = useState<LibraryTrack[]>(() => globalLibraryCache?.tracks || []);
+  const [mappedFolders, setMappedFolders] = useState<MappedFolder[]>(() => globalLibraryCache?.mappedFolders || []);
+  const [totalTracks, setTotalTracks] = useState<number>(() => globalLibraryCache?.totalTracks || 0);
+  const [totalHires, setTotalHires] = useState<number>(() => globalLibraryCache?.totalHires || 0);
   const [activeView, setActiveView] = useState<"albums" | "artists" | "tracks" | "hires" | "dsd">(
-    "albums"
+    () => (tab && ["albums", "artists", "tracks", "hires", "dsd"].includes(tab) ? (tab as any) : "albums")
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"title" | "artist" | "dr" | "hires">("title");
+
+  const switchTab = useCallback((newTab: "albums" | "artists" | "tracks" | "hires" | "dsd") => {
+    setActiveView(newTab);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", newTab);
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
 
   useEffect(() => {
     if (tab && ["albums", "artists", "tracks", "hires", "dsd"].includes(tab)) {
       setActiveView(tab as "albums" | "artists" | "tracks" | "hires" | "dsd");
     }
   }, [tab]);
-  const [loading, setLoading] = useState(true);
+
+  // Listen to cross-component tab switch events and popstate for 0ms transitions
+  useEffect(() => {
+    const handleTabEvent = (e: any) => {
+      const target = e.detail;
+      if (["albums", "artists", "tracks", "hires", "dsd"].includes(target)) {
+        setActiveView(target);
+      }
+    };
+    const handlePopState = () => {
+      const p = new URLSearchParams(window.location.search);
+      const t = p.get("tab");
+      if (t && ["albums", "artists", "tracks", "hires", "dsd"].includes(t)) {
+        setActiveView(t as any);
+      }
+    };
+    window.addEventListener("kv-library-tab", handleTabEvent as EventListener);
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("kv-library-tab", handleTabEvent as EventListener);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  const [loading, setLoading] = useState<boolean>(() => globalLibraryCache === null);
   const [rescanning, setRescanning] = useState(false);
   const [selectedAlbum, setSelectedAlbum] = useState<{
     id: string;
@@ -57,23 +105,78 @@ function LibraryContent() {
     avatar?: string;
   } | null>(null);
 
-  const fetchLibrary = async () => {
+  const [displayLimit, setDisplayLimit] = useState(60);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset windowing limit on tab switch, search, or sort change
+  useEffect(() => {
+    setDisplayLimit(60);
+  }, [activeView, searchQuery, sortBy]);
+
+  // Infinite scroll observer: load next batch when sentinel enters viewport (with 600px buffer)
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setDisplayLimit((prev) => prev + 60);
+        }
+      },
+      { rootMargin: "600px" }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [sentinelRef.current, activeView, searchQuery, sortBy]);
+
+  const fetchLibrary = async (isBackground = false) => {
+    if (!isBackground && !globalLibraryCache) {
+      setLoading(true);
+    }
     try {
-      const resp = await fetch("/api/library");
+      // Parallelize fetches to cut network wait time in half
+      const [resp, tracksResp] = await Promise.all([
+        fetch("/api/library"),
+        fetch("/api/library/tracks"),
+      ]);
+
+      let newAlbums = globalLibraryCache?.albums || [];
+      let newArtists = globalLibraryCache?.artists || [];
+      let newFolders = globalLibraryCache?.mappedFolders || [];
+      let newTotalTracks = globalLibraryCache?.totalTracks || 0;
+      let newTotalHires = globalLibraryCache?.totalHires || 0;
+      let newTracks = globalLibraryCache?.tracks || [];
+
       if (resp.ok) {
         const data = await resp.json();
-        setAlbums(data.albums || []);
-        setArtists(data.artists || []);
-        setMappedFolders(data.mapped_folders || []);
-        setTotalTracks(data.total_tracks || 0);
-        setTotalHires(data.total_hires || 0);
+        newAlbums = data.albums || [];
+        newArtists = data.artists || [];
+        newFolders = data.mapped_folders || [];
+        newTotalTracks = data.total_tracks || 0;
+        newTotalHires = data.total_hires || 0;
+        setAlbums(newAlbums);
+        setArtists(newArtists);
+        setMappedFolders(newFolders);
+        setTotalTracks(newTotalTracks);
+        setTotalHires(newTotalHires);
       }
 
-      const tracksResp = await fetch("/api/library/tracks");
       if (tracksResp.ok) {
         const tData = await tracksResp.json();
-        setTracks(tData.tracks || []);
+        newTracks = tData.tracks || [];
+        setTracks(newTracks);
       }
+
+      globalLibraryCache = {
+        albums: newAlbums,
+        artists: newArtists,
+        tracks: newTracks,
+        mappedFolders: newFolders,
+        totalTracks: newTotalTracks,
+        totalHires: newTotalHires,
+      };
     } catch (e) {
       console.error("Library fetch failed:", e);
     } finally {
@@ -82,7 +185,8 @@ function LibraryContent() {
   };
 
   useEffect(() => {
-    fetchLibrary();
+    // If we have cache, render instantly and revalidate in background; otherwise fetch with loader
+    fetchLibrary(globalLibraryCache !== null);
   }, []);
 
   const handleRescan = async (deep: boolean = false) => {
@@ -98,66 +202,216 @@ function LibraryContent() {
     }
   };
 
-  // Dynamic DR average
-  const tracksWithDr = tracks.filter((t) => t.dr_score && t.dr_score > 0);
-  const avgDr =
-    tracksWithDr.length > 0
+  const { playTrack } = usePlayer();
+
+  const handlePlayAlbumDirect = async (album: LibraryAlbum, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+
+    let albumTracks = tracks.filter(
+      (t) =>
+        t.album.toLowerCase() === album.name.toLowerCase() &&
+        (album.artist ? t.artist.toLowerCase() === album.artist.toLowerCase() : true)
+    );
+
+    if (albumTracks.length === 0) {
+      try {
+        const resp = await fetch(`/api/library/album?id=${encodeURIComponent(album.id)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          albumTracks = data.tracks || [];
+        }
+      } catch (err) {
+        console.error("Failed to fetch album tracks:", err);
+      }
+    }
+
+    if (albumTracks.length === 0) return;
+
+    albumTracks.sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
+
+    const queueItems: PlayableTrack[] = albumTracks.map((t) => ({
+      id: t.id,
+      title: t.title,
+      artist: t.artist,
+      album: t.album,
+      coverUrl: `/rest/getCoverArt.view?id=album-${album.id}`,
+      streamUrl: `/api/stream?id=${encodeURIComponent(t.id)}`,
+      duration: t.duration,
+      bitDepth: t.bit_depth || 24,
+      sampleRate: t.sample_rate || 96000,
+      format: t.format?.toUpperCase() || "FLAC",
+      hires: t.hires,
+      source: "local",
+      drScore: t.dr_score || 12,
+      isDsd: t.is_dsd,
+    }));
+
+    playTrack(queueItems[0], queueItems);
+  };
+
+  // Dynamic DR average (memoized across 8,000+ tracks)
+  const avgDr = useMemo(() => {
+    const tracksWithDr = tracks.filter((t) => t.dr_score && t.dr_score > 0);
+    return tracksWithDr.length > 0
       ? (tracksWithDr.reduce((acc, t) => acc + (t.dr_score || 0), 0) / tracksWithDr.length).toFixed(1)
       : "13.0";
+  }, [tracks]);
 
   // Filter lists based on searchQuery and activeView
   const queryLower = searchQuery.trim().toLowerCase();
 
-  const filterTrackBySearch = (t: LibraryTrack) => {
-    if (!queryLower) return true;
-    return (
-      t.title.toLowerCase().includes(queryLower) ||
-      t.artist.toLowerCase().includes(queryLower) ||
-      t.album.toLowerCase().includes(queryLower)
+  const filterTrackBySearch = useCallback(
+    (t: LibraryTrack) => {
+      if (!queryLower) return true;
+      return (
+        t.title.toLowerCase().includes(queryLower) ||
+        t.artist.toLowerCase().includes(queryLower) ||
+        t.album.toLowerCase().includes(queryLower)
+      );
+    },
+    [queryLower]
+  );
+
+  const sortTracksList = useCallback(
+    (list: LibraryTrack[]) => {
+      return [...list].sort((a, b) => {
+        if (sortBy === "dr") return (b.dr_score || 0) - (a.dr_score || 0);
+        if (sortBy === "artist") return a.artist.localeCompare(b.artist);
+        if (sortBy === "hires") {
+          const aVal = (a.bit_depth || 16) * 1000000 + (a.sample_rate || 44100);
+          const bVal = (b.bit_depth || 16) * 1000000 + (b.sample_rate || 44100);
+          return bVal - aVal;
+        }
+        return a.title.localeCompare(b.title);
+      });
+    },
+    [sortBy]
+  );
+
+  const hiresTracks = useMemo(() => {
+    return sortTracksList(
+      tracks.filter(
+        (t) =>
+          (t.hires || (t.bit_depth && t.bit_depth > 16) || (t.sample_rate && t.sample_rate > 44100)) &&
+          filterTrackBySearch(t)
+      )
     );
-  };
+  }, [tracks, sortTracksList, filterTrackBySearch]);
 
-  const sortTracksList = (list: LibraryTrack[]) => {
-    return [...list].sort((a, b) => {
-      if (sortBy === "dr") return (b.dr_score || 0) - (a.dr_score || 0);
-      if (sortBy === "artist") return a.artist.localeCompare(b.artist);
-      if (sortBy === "hires") {
-        const aVal = (a.bit_depth || 16) * 1000000 + (a.sample_rate || 44100);
-        const bVal = (b.bit_depth || 16) * 1000000 + (b.sample_rate || 44100);
-        return bVal - aVal;
-      }
-      return a.title.localeCompare(b.title);
+  const dsdTracks = useMemo(() => {
+    return sortTracksList(
+      tracks.filter(
+        (t) =>
+          (t.is_dsd || t.format?.toLowerCase() === "dsf" || t.format?.toLowerCase() === "dff") &&
+          filterTrackBySearch(t)
+      )
+    );
+  }, [tracks, sortTracksList, filterTrackBySearch]);
+
+  const allFilteredTracks = useMemo(() => {
+    return sortTracksList(tracks.filter(filterTrackBySearch));
+  }, [tracks, sortTracksList, filterTrackBySearch]);
+
+  const filteredAlbums = useMemo(() => {
+    const list = albums.filter((alb) => {
+      if (!queryLower) return true;
+      return alb.name.toLowerCase().includes(queryLower) || alb.artist.toLowerCase().includes(queryLower);
     });
-  };
+    return list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  }, [albums, queryLower]);
 
-  const hiresTracks = sortTracksList(
-    tracks.filter(
-      (t) =>
-        (t.hires || (t.bit_depth && t.bit_depth > 16) || (t.sample_rate && t.sample_rate > 44100)) &&
-        filterTrackBySearch(t)
-    )
+  const filteredArtists = useMemo(() => {
+    const list = artists.filter((art) => {
+      if (!queryLower) return true;
+      return art.name.toLowerCase().includes(queryLower);
+    });
+    return list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  }, [artists, queryLower]);
+
+  const alphabetData = useMemo(() => {
+    const isAlphabetical =
+      activeView === "albums" ||
+      activeView === "artists" ||
+      sortBy === "title" ||
+      sortBy === "artist";
+
+    if (!isAlphabetical) {
+      return { availableLetters: new Set<string>(), letterIndexMap: {} };
+    }
+
+    let names: string[] = [];
+    if (activeView === "albums") {
+      names = filteredAlbums.map((a) => a.name);
+    } else if (activeView === "artists") {
+      names = filteredArtists.map((a) => a.name);
+    } else if (activeView === "hires") {
+      names = hiresTracks.map((t) => (sortBy === "artist" ? t.artist : t.title));
+    } else if (activeView === "dsd") {
+      names = dsdTracks.map((t) => (sortBy === "artist" ? t.artist : t.title));
+    } else {
+      names = allFilteredTracks.map((t) => (sortBy === "artist" ? t.artist : t.title));
+    }
+
+    return buildLetterIndexMap(names);
+  }, [
+    activeView,
+    sortBy,
+    filteredAlbums,
+    filteredArtists,
+    hiresTracks,
+    dsdTracks,
+    allFilteredTracks,
+  ]);
+
+  const handleSelectLetter = useCallback(
+    (letter: string) => {
+      const targetIndex = alphabetData.letterIndexMap[letter];
+      if (targetIndex === undefined) return;
+
+      if (targetIndex >= displayLimit) {
+        setDisplayLimit(targetIndex + 60);
+      }
+
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`letter-anchor-${letter}`);
+        const container = document.getElementById("main-content");
+        if (el && container) {
+          const containerRect = container.getBoundingClientRect();
+          const elRect = el.getBoundingClientRect();
+          const relativeTop = elRect.top - containerRect.top + container.scrollTop - 20;
+          container.scrollTo({
+            top: Math.max(0, relativeTop),
+            behavior: "smooth",
+          });
+        }
+      });
+    },
+    [alphabetData.letterIndexMap, displayLimit]
   );
-  const dsdTracks = sortTracksList(
-    tracks.filter(
-      (t) =>
-        (t.is_dsd || t.format.toLowerCase() === "dsf" || t.format.toLowerCase() === "dff") &&
-        filterTrackBySearch(t)
-    )
-  );
-  const allFilteredTracks = sortTracksList(tracks.filter(filterTrackBySearch));
 
-  const filteredAlbums = albums.filter((alb) => {
-    if (!queryLower) return true;
-    return alb.name.toLowerCase().includes(queryLower) || alb.artist.toLowerCase().includes(queryLower);
-  });
+  // Progressive windowing slices (only renders top N elements into the DOM)
+  const visibleAlbums = useMemo(() => filteredAlbums.slice(0, displayLimit), [filteredAlbums, displayLimit]);
+  const visibleArtists = useMemo(() => filteredArtists.slice(0, displayLimit), [filteredArtists, displayLimit]);
+  const visibleHires = useMemo(() => hiresTracks.slice(0, displayLimit), [hiresTracks, displayLimit]);
+  const visibleDsd = useMemo(() => dsdTracks.slice(0, displayLimit), [dsdTracks, displayLimit]);
+  const visibleTracks = useMemo(() => allFilteredTracks.slice(0, displayLimit), [allFilteredTracks, displayLimit]);
 
-  const filteredArtists = artists.filter((art) => {
-    if (!queryLower) return true;
-    return art.name.toLowerCase().includes(queryLower);
-  });
+  const currentTotal =
+    activeView === "albums"
+      ? filteredAlbums.length
+      : activeView === "artists"
+      ? filteredArtists.length
+      : activeView === "hires"
+      ? hiresTracks.length
+      : activeView === "dsd"
+      ? dsdTracks.length
+      : allFilteredTracks.length;
+
+  const currentCount = Math.min(displayLimit, currentTotal);
+  const hasMore = currentCount < currentTotal;
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 pb-12 pr-6 sm:pr-8">
       {/* Header & Rescan Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -245,7 +499,7 @@ function LibraryContent() {
       {/* Switcher View with Audiophile Hi-Res Filters */}
       <div className="flex items-center space-x-2 border-b border-border pb-3 overflow-x-auto no-scrollbar">
         <button
-          onClick={() => setActiveView("albums")}
+          onClick={() => switchTab("albums")}
           className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${
             activeView === "albums"
               ? "bg-white text-black"
@@ -255,7 +509,7 @@ function LibraryContent() {
           Albums ({filteredAlbums.length !== albums.length ? `${filteredAlbums.length}/${albums.length}` : albums.length})
         </button>
         <button
-          onClick={() => setActiveView("artists")}
+          onClick={() => switchTab("artists")}
           className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${
             activeView === "artists"
               ? "bg-white text-black"
@@ -265,7 +519,7 @@ function LibraryContent() {
           Artists ({filteredArtists.length !== artists.length ? `${filteredArtists.length}/${artists.length}` : artists.length})
         </button>
         <button
-          onClick={() => setActiveView("tracks")}
+          onClick={() => switchTab("tracks")}
           className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${
             activeView === "tracks"
               ? "bg-white text-black"
@@ -275,7 +529,7 @@ function LibraryContent() {
           All Tracks ({allFilteredTracks.length !== tracks.length ? `${allFilteredTracks.length}/${tracks.length}` : tracks.length})
         </button>
         <button
-          onClick={() => setActiveView("hires")}
+          onClick={() => switchTab("hires")}
           className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer flex items-center space-x-1.5 ${
             activeView === "hires"
               ? "bg-amber-400 text-black shadow-md shadow-amber-400/20 font-extrabold"
@@ -286,7 +540,7 @@ function LibraryContent() {
           <span>Studio Masters ({hiresTracks.length})</span>
         </button>
         <button
-          onClick={() => setActiveView("dsd")}
+          onClick={() => switchTab("dsd")}
           className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${
             activeView === "dsd"
               ? "bg-purple-500 text-white shadow-md shadow-purple-500/20 font-extrabold"
@@ -356,38 +610,56 @@ function LibraryContent() {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {filteredAlbums.map((album) => (
-              <div
-                key={album.id}
-                onClick={() =>
-                  setSelectedAlbum({
-                    id: album.id,
-                    title: album.name,
-                    artist: album.artist,
-                    coverUrl: `/rest/getCoverArt.view?id=album-${album.id}`,
-                    releaseDate: album.year ? String(album.year) : undefined,
-                    trackCount: album.track_count,
-                  })
-                }
-                className="group bg-card hover:bg-cardHover border border-border hover:border-borderHover rounded-tidal p-3 transition-colors cursor-pointer"
-              >
+            {visibleAlbums.map((album, idx) => {
+              const letter = getSortLetter(album.name);
+              const isFirstOfLetter = alphabetData.letterIndexMap[letter] === idx;
+
+              return (
+                <div
+                  key={album.id}
+                  id={isFirstOfLetter ? `letter-anchor-${letter}` : undefined}
+                  onClick={() =>
+                    setSelectedAlbum({
+                      id: album.id,
+                      title: album.name,
+                      artist: album.artist,
+                      coverUrl: `/rest/getCoverArt.view?id=album-${album.id}`,
+                      releaseDate: album.year ? String(album.year) : undefined,
+                      trackCount: album.track_count,
+                    })
+                  }
+                  className="group bg-card hover:bg-cardHover border border-border hover:border-borderHover rounded-tidal p-3 transition-colors cursor-pointer scroll-mt-4"
+                >
                 <div className="relative aspect-square rounded-tidal bg-black border border-border mb-3 overflow-hidden flex items-center justify-center">
-                  {album.cover_path ? (
-                    <img
-                      src={`/rest/getCoverArt.view?id=album-${album.id}`}
-                      alt={album.name}
-                      onError={(e) => {
-                        e.currentTarget.style.display = "none";
-                      }}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                  ) : (
+                  <img
+                    src={`/rest/getCoverArt.view?id=album-${album.id}`}
+                    alt={album.name}
+                    loading="lazy"
+                    decoding="async"
+                    onError={(e) => {
+                      e.currentTarget.style.display = "none";
+                      const fallback = e.currentTarget.parentElement?.querySelector(".fallback-disc");
+                      if (fallback) fallback.classList.remove("hidden");
+                    }}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  />
+                  <div className="fallback-disc hidden absolute inset-0 flex items-center justify-center bg-black/80">
                     <Disc className="w-10 h-10 text-textSecondary group-hover:text-primary transition-colors" />
-                  )}
+                  </div>
+
                   {/* Quality Tag */}
-                  <span className="absolute top-2 right-2 px-1.5 py-0.2 rounded text-[8px] font-mono font-bold bg-black/80 backdrop-blur-md text-badgeMax border border-badgeMax/40">
+                  <span className="absolute top-2 right-2 px-1.5 py-0.2 rounded text-[8px] font-mono font-bold bg-black/80 backdrop-blur-md text-badgeMax border border-badgeMax/40 pointer-events-none">
                     FLAC 24/96
                   </span>
+
+                  {/* Hover Quick Play Button */}
+                  <div
+                    onClick={(e) => handlePlayAlbumDirect(album, e)}
+                    title={`Play ${album.name}`}
+                    className="absolute right-2.5 bottom-2.5 w-10 h-10 rounded-full bg-primary text-black flex items-center justify-center shadow-xl opacity-0 group-hover:opacity-100 group-hover:scale-105 active:scale-95 transition-all duration-200 z-10 cursor-pointer hover:bg-primary/90"
+                  >
+                    <Play className="w-4 h-4 fill-current ml-0.5" />
+                  </div>
                 </div>
                 <h4 className="text-sm font-semibold text-textPrimary truncate group-hover:underline">
                   {album.name}
@@ -398,8 +670,9 @@ function LibraryContent() {
                   <span className="text-emerald-400">DR13</span>
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
+        </div>
         )
       ) : activeView === "artists" ? (
         filteredArtists.length === 0 ? (
@@ -411,23 +684,29 @@ function LibraryContent() {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            {filteredArtists.map((artist) => (
-              <div
-                key={artist.id}
-                onClick={() => setSelectedArtist({ name: artist.name })}
-                className="bg-surface hover:bg-card border border-border hover:border-primary/40 p-3.5 rounded-xl flex items-center space-x-3 transition-colors cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-bold group-hover:bg-primary group-hover:text-black transition-colors">
-                  {artist.name.charAt(0).toUpperCase()}
+            {visibleArtists.map((artist, idx) => {
+              const letter = getSortLetter(artist.name);
+              const isFirstOfLetter = alphabetData.letterIndexMap[letter] === idx;
+
+              return (
+                <div
+                  key={artist.id}
+                  id={isFirstOfLetter ? `letter-anchor-${letter}` : undefined}
+                  onClick={() => setSelectedArtist({ name: artist.name })}
+                  className="bg-surface hover:bg-card border border-border hover:border-primary/40 p-3.5 rounded-xl flex items-center space-x-3 transition-colors cursor-pointer group scroll-mt-4"
+                >
+                  <div className="w-10 h-10 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-bold group-hover:bg-primary group-hover:text-black transition-colors">
+                    {artist.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h4 className="text-sm font-semibold text-textPrimary truncate group-hover:text-primary transition-colors">{artist.name}</h4>
+                    <p className="text-xs text-textSecondary">
+                      {artist.album_count} albums · {artist.track_count} tracks
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h4 className="text-sm font-semibold text-textPrimary truncate group-hover:text-primary transition-colors">{artist.name}</h4>
-                  <p className="text-xs text-textSecondary">
-                    {artist.album_count} albums · {artist.track_count} tracks
-                  </p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )
       ) : activeView === "hires" ? (
@@ -438,24 +717,46 @@ function LibraryContent() {
               No $\ge$ 24-bit / 96kHz tracks found in NAS library yet.
             </div>
           ) : (
-            hiresTracks.map((track) => (
-              <TrackRow
-                key={track.id}
-                title={track.title}
-                artist={track.artist}
-                album={track.album}
-                coverUrl={`/rest/getCoverArt.view?id=cover-${track.id}`}
-                duration={track.duration}
-                streamId={track.id}
-                source="local"
-                hires={true}
-                bitDepth={track.bit_depth || 24}
-                sampleRate={track.sample_rate || 96000}
-                bitrate={track.bitrate || 2800}
-                format={track.format?.toUpperCase() || "FLAC"}
-                drScore={track.dr_score || 13}
-              />
-            ))
+            visibleHires.map((track, idx) => {
+              const name = sortBy === "artist" ? track.artist : track.title;
+              const letter = getSortLetter(name);
+              const isFirstOfLetter = alphabetData.letterIndexMap[letter] === idx;
+
+              return (
+                <React.Fragment key={track.id}>
+                  {isFirstOfLetter && (
+                    <div
+                      id={`letter-anchor-${letter}`}
+                      className="sticky top-0 z-10 -mx-1 px-3 py-1.5 my-1 text-xs font-mono font-bold text-primary bg-background/95 backdrop-blur-md border-b border-border/70 flex items-center justify-between shadow-sm scroll-mt-4"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <span className="w-5 h-5 rounded bg-primary/10 border border-primary/30 flex items-center justify-center text-[11px] text-primary">
+                          {letter}
+                        </span>
+                        <span className="text-[10px] text-textSecondary uppercase tracking-wider font-semibold">
+                          {sortBy === "artist" ? "Artist" : "Title"} · {letter}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  <TrackRow
+                    title={track.title}
+                    artist={track.artist}
+                    album={track.album}
+                    coverUrl={`/rest/getCoverArt.view?id=cover-${track.id}`}
+                    duration={track.duration}
+                    streamId={track.id}
+                    source="local"
+                    hires={true}
+                    bitDepth={track.bit_depth || 24}
+                    sampleRate={track.sample_rate || 96000}
+                    bitrate={track.bitrate || 2800}
+                    format={track.format?.toUpperCase() || "FLAC"}
+                    drScore={track.dr_score || 13}
+                  />
+                </React.Fragment>
+              );
+            })
           )}
         </div>
       ) : activeView === "dsd" ? (
@@ -466,25 +767,47 @@ function LibraryContent() {
               No DSD (.dsf / .dff) files mapped in NAS library. Add DSD shares in Settings!
             </div>
           ) : (
-            dsdTracks.map((track) => (
-              <TrackRow
-                key={track.id}
-                title={track.title}
-                artist={track.artist}
-                album={track.album}
-                coverUrl={`/rest/getCoverArt.view?id=cover-${track.id}`}
-                duration={track.duration}
-                streamId={track.id}
-                source="local"
-                hires={true}
-                bitDepth={1}
-                sampleRate={2822400}
-                bitrate={5644}
-                format="DSD64"
-                isDsd={true}
-                drScore={track.dr_score || 14}
-              />
-            ))
+            visibleDsd.map((track, idx) => {
+              const name = sortBy === "artist" ? track.artist : track.title;
+              const letter = getSortLetter(name);
+              const isFirstOfLetter = alphabetData.letterIndexMap[letter] === idx;
+
+              return (
+                <React.Fragment key={track.id}>
+                  {isFirstOfLetter && (
+                    <div
+                      id={`letter-anchor-${letter}`}
+                      className="sticky top-0 z-10 -mx-1 px-3 py-1.5 my-1 text-xs font-mono font-bold text-primary bg-background/95 backdrop-blur-md border-b border-border/70 flex items-center justify-between shadow-sm scroll-mt-4"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <span className="w-5 h-5 rounded bg-primary/10 border border-primary/30 flex items-center justify-center text-[11px] text-primary">
+                          {letter}
+                        </span>
+                        <span className="text-[10px] text-textSecondary uppercase tracking-wider font-semibold">
+                          {sortBy === "artist" ? "Artist" : "Title"} · {letter}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  <TrackRow
+                    title={track.title}
+                    artist={track.artist}
+                    album={track.album}
+                    coverUrl={`/rest/getCoverArt.view?id=cover-${track.id}`}
+                    duration={track.duration}
+                    streamId={track.id}
+                    source="local"
+                    hires={true}
+                    bitDepth={1}
+                    sampleRate={2822400}
+                    bitrate={5644}
+                    format="DSD64"
+                    isDsd={true}
+                    drScore={track.dr_score || 14}
+                  />
+                </React.Fragment>
+              );
+            })
           )}
         </div>
       ) : (
@@ -495,25 +818,63 @@ function LibraryContent() {
               {searchQuery ? `No tracks matching "${searchQuery}"` : "No tracks found in NAS library. Add tracks or download from Search!"}
             </div>
           ) : (
-            allFilteredTracks.map((track) => (
-              <TrackRow
-                key={track.id}
-                title={track.title}
-                artist={track.artist}
-                album={track.album}
-                coverUrl={`/rest/getCoverArt.view?id=cover-${track.id}`}
-                duration={track.duration}
-                streamId={track.id}
-                source="local"
-                hires={track.hires}
-                bitDepth={track.bit_depth}
-                sampleRate={track.sample_rate}
-                bitrate={track.bitrate}
-                format={track.format?.toUpperCase()}
-                drScore={track.dr_score || 12}
-              />
-            ))
+            visibleTracks.map((track, idx) => {
+              const name = sortBy === "artist" ? track.artist : track.title;
+              const letter = getSortLetter(name);
+              const isFirstOfLetter = alphabetData.letterIndexMap[letter] === idx;
+
+              return (
+                <React.Fragment key={track.id}>
+                  {isFirstOfLetter && (
+                    <div
+                      id={`letter-anchor-${letter}`}
+                      className="sticky top-0 z-10 -mx-1 px-3 py-1.5 my-1 text-xs font-mono font-bold text-primary bg-background/95 backdrop-blur-md border-b border-border/70 flex items-center justify-between shadow-sm scroll-mt-4"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <span className="w-5 h-5 rounded bg-primary/10 border border-primary/30 flex items-center justify-center text-[11px] text-primary">
+                          {letter}
+                        </span>
+                        <span className="text-[10px] text-textSecondary uppercase tracking-wider font-semibold">
+                          {sortBy === "artist" ? "Artist" : "Title"} · {letter}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  <TrackRow
+                    title={track.title}
+                    artist={track.artist}
+                    album={track.album}
+                    coverUrl={`/rest/getCoverArt.view?id=cover-${track.id}`}
+                    duration={track.duration}
+                    streamId={track.id}
+                    source="local"
+                    hires={track.hires}
+                    bitDepth={track.bit_depth}
+                    sampleRate={track.sample_rate}
+                    bitrate={track.bitrate}
+                    format={track.format?.toUpperCase()}
+                    drScore={track.dr_score || 12}
+                  />
+                </React.Fragment>
+              );
+            })
           )}
+        </div>
+      )}
+
+      {/* Progressive Windowing Infinite Scroll Sentinel */}
+      <div ref={sentinelRef} className="h-4 w-full" />
+
+      {/* Progressive Loading Telemetry Status */}
+      {hasMore && (
+        <div className="flex justify-center items-center py-4 text-xs text-textSecondary font-mono">
+          <RefreshCw className="w-3.5 h-3.5 animate-spin mr-2 text-primary" />
+          <span>Loading more items... (Showing {currentCount} of {currentTotal})</span>
+        </div>
+      )}
+      {!hasMore && currentTotal > 60 && (
+        <div className="text-center py-4 text-xs text-textSecondary/60 font-mono">
+          All {currentTotal} items loaded
         </div>
       )}
 
@@ -532,6 +893,14 @@ function LibraryContent() {
         artistAvatar={selectedArtist?.avatar}
         onAlbumClick={(alb) => setSelectedAlbum(alb)}
       />
+
+      {/* Right-Hand Side Alphabet Fast Scroller Rail */}
+      {alphabetData.availableLetters.size > 0 && (
+        <AlphabetScroller
+          availableLetters={alphabetData.availableLetters}
+          onSelectLetter={handleSelectLetter}
+        />
+      )}
     </div>
   );
 }

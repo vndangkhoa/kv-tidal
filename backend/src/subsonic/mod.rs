@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use crate::storage::scanner::find_sidecar_cover;
 use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -7,6 +8,7 @@ use axum::Router;
 use lofty::file::TaggedFileExt;
 use serde::Deserialize;
 use serde_json::json;
+use std::path::Path;
 use tower_service::Service;
 
 #[derive(Debug, Deserialize)]
@@ -238,21 +240,47 @@ async fn get_cover_art(Query(params): Query<SubsonicParams>, State(state): State
         }
     }
 
+fn get_image_mime(path: &Path) -> &'static str {
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        _ => "image/jpeg",
+    }
+}
+
     // 2. Check if it's a track ID ("cover-<track_id>" or direct "<track_id>")
     let clean_track_id = id.trim_start_matches("cover-");
     {
         let lib = state.library.read().await;
         if let Some(track) = lib.tracks.get(clean_track_id) {
-            // Check the album/track folder on disk for cover.jpg / folder.jpg
+            // Check the album/track folder on disk for sidecar cover images
             if let Some(parent) = track.file_path.parent() {
-                for name in &["cover.jpg", "cover.png", "folder.jpg", "folder.png", "Cover.jpg", "Folder.jpg"] {
-                    let p = parent.join(name);
-                    if p.exists() {
-                        if let Ok(bytes) = tokio::fs::read(&p).await {
-                            let ct = if name.ends_with(".png") { "image/png" } else { "image/jpeg" };
-                            return ([(header::CONTENT_TYPE, ct)], bytes).into_response();
-                        }
+                if let Some(p) = find_sidecar_cover(parent) {
+                    if let Ok(bytes) = tokio::fs::read(&p).await {
+                        return (
+                            [
+                                (header::CONTENT_TYPE, get_image_mime(&p)),
+                                (header::CACHE_CONTROL, "public, max-age=86400"),
+                            ],
+                            bytes,
+                        ).into_response();
                     }
+                }
+            }
+
+            // Check persistent disk cache in data/covers/track_{clean_track_id}.jpg
+            let data_dir = state.config.read().await.data_dir.clone();
+            let cache_path = data_dir.join("covers").join(format!("track_{}.jpg", clean_track_id));
+            if cache_path.exists() {
+                if let Ok(bytes) = tokio::fs::read(&cache_path).await {
+                    return (
+                        [
+                            (header::CONTENT_TYPE, "image/jpeg"),
+                            (header::CACHE_CONTROL, "public, max-age=86400"),
+                        ],
+                        bytes,
+                    ).into_response();
                 }
             }
 
@@ -266,7 +294,17 @@ async fn get_cover_art(Query(params): Query<SubsonicParams>, State(state): State
                                     Some(lofty::picture::MimeType::Png) => "image/png",
                                     _ => "image/jpeg",
                                 };
-                                return ([(header::CONTENT_TYPE, mime)], pic.data().to_vec()).into_response();
+                                let pic_data = pic.data().to_vec();
+                                let covers_dir = data_dir.join("covers");
+                                let _ = tokio::fs::create_dir_all(&covers_dir).await;
+                                let _ = tokio::fs::write(&cache_path, &pic_data).await;
+                                return (
+                                    [
+                                        (header::CONTENT_TYPE, mime),
+                                        (header::CACHE_CONTROL, "public, max-age=86400"),
+                                    ],
+                                    pic_data,
+                                ).into_response();
                             }
                         }
                     }
@@ -276,17 +314,113 @@ async fn get_cover_art(Query(params): Query<SubsonicParams>, State(state): State
     }
 
     // 3. Check local library album covers ("album-<album_id>" or matching album)
-    {
+    let clean_album_id = id.trim_start_matches("album-").trim_start_matches("cover-");
+    let target_album = {
         let lib = state.library.read().await;
-        let clean_album_id = id.trim_start_matches("album-").trim_start_matches("cover-");
-        for album in lib.albums.values() {
-            if album.id == clean_album_id || id.contains(&album.id) {
-                if let Some(cp) = &album.cover_path {
-                    if cp.exists() {
-                        if let Ok(bytes) = tokio::fs::read(cp).await {
-                            return ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response();
+        lib.albums.values().find(|a| a.id == clean_album_id || id.contains(&a.id)).cloned()
+    };
+
+    if let Some(album) = target_album {
+        // 3a. Check if album already has a valid cover_path on disk
+        if let Some(cp) = &album.cover_path {
+            if cp.exists() {
+                if let Ok(bytes) = tokio::fs::read(cp).await {
+                    return (
+                        [
+                            (header::CONTENT_TYPE, get_image_mime(cp)),
+                            (header::CACHE_CONTROL, "public, max-age=86400"),
+                        ],
+                        bytes,
+                    ).into_response();
+                }
+            }
+        }
+
+        // 3b. Check persistent cache in data/covers/album_{album_id}.jpg
+        let data_dir = state.config.read().await.data_dir.clone();
+        let cache_path = data_dir.join("covers").join(format!("album_{}.jpg", album.id));
+        if cache_path.exists() {
+            if let Ok(bytes) = tokio::fs::read(&cache_path).await {
+                return (
+                    [
+                        (header::CONTENT_TYPE, "image/jpeg"),
+                        (header::CACHE_CONTROL, "public, max-age=86400"),
+                    ],
+                    bytes,
+                ).into_response();
+            }
+        }
+
+        // 3c. Search all tracks belonging to this album for sidecars or embedded pictures
+        let album_tracks: Vec<_> = {
+            let lib = state.library.read().await;
+            lib.tracks.values()
+                .filter(|t| t.album.eq_ignore_ascii_case(&album.name) && (album.artist.is_empty() || t.artist.eq_ignore_ascii_case(&album.artist)))
+                .cloned()
+                .collect()
+        };
+
+        for track in &album_tracks {
+            // Check track folder for any sidecar image
+            if let Some(parent) = track.file_path.parent() {
+                if let Some(sc) = find_sidecar_cover(parent) {
+                    if let Ok(bytes) = tokio::fs::read(&sc).await {
+                        return (
+                            [
+                                (header::CONTENT_TYPE, get_image_mime(&sc)),
+                                (header::CACHE_CONTROL, "public, max-age=86400"),
+                            ],
+                            bytes,
+                        ).into_response();
+                    }
+                }
+            }
+
+            // Check embedded picture in audio file
+            if track.file_path.exists() {
+                if let Ok(probe) = lofty::probe::Probe::open(&track.file_path) {
+                    if let Ok(tagged_file) = probe.read() {
+                        if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+                            if let Some(pic) = tag.pictures().first() {
+                                let mime = match pic.mime_type() {
+                                    Some(lofty::picture::MimeType::Png) => "image/png",
+                                    _ => "image/jpeg",
+                                };
+                                let data = pic.data().to_vec();
+                                // Cache extracted image to disk for fast subsequent loads
+                                let covers_dir = data_dir.join("covers");
+                                let _ = tokio::fs::create_dir_all(&covers_dir).await;
+                                let _ = tokio::fs::write(covers_dir.join(format!("album_{}.jpg", album.id)), &data).await;
+
+                                return (
+                                    [
+                                        (header::CONTENT_TYPE, mime),
+                                        (header::CACHE_CONTROL, "public, max-age=86400"),
+                                    ],
+                                    data,
+                                ).into_response();
+                            }
                         }
                     }
+                }
+            }
+        }
+
+        // 3d. Fallback: Query Apple Music CDN for online 1000x1000 cover
+        let query = format!("{} {}", album.artist, album.name);
+        if let Some(meta) = state.metadata.resolve_apple_music(&query).await {
+            if let Some(ref curl) = meta.cover_url {
+                if let Ok(bytes) = state.metadata.download_image_bytes(curl).await {
+                    let covers_dir = data_dir.join("covers");
+                    let _ = tokio::fs::create_dir_all(&covers_dir).await;
+                    let _ = tokio::fs::write(covers_dir.join(format!("album_{}.jpg", album.id)), &bytes).await;
+                    return (
+                        [
+                            (header::CONTENT_TYPE, "image/jpeg"),
+                            (header::CACHE_CONTROL, "public, max-age=86400"),
+                        ],
+                        bytes,
+                    ).into_response();
                 }
             }
         }

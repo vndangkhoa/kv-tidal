@@ -76,6 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             for ar in artists {
                                 store.artists.insert(ar.id.clone(), ar);
                             }
+                            store.cached_tracks_json = None;
                         });
                     }
                 }

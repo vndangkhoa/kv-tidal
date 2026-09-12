@@ -88,6 +88,24 @@ function NavItem({ href, onClick, icon: Icon, label, badge, badgeColor = "primar
     </div>
   );
 
+  const handleLinkClick = (e: React.MouseEvent) => {
+    if (href && (pathname === "/library" || pathname === "/library/")) {
+      const [path, query] = href.split("?");
+      if (path === "/library" || path === "/library/") {
+        e.preventDefault();
+        const targetTab = new URLSearchParams(query || "").get("tab") || "albums";
+        window.dispatchEvent(new CustomEvent("kv-library-tab", { detail: targetTab }));
+        const url = new URL(window.location.href);
+        if (targetTab) {
+          url.searchParams.set("tab", targetTab);
+        } else {
+          url.searchParams.delete("tab");
+        }
+        window.history.replaceState(null, "", url.toString());
+      }
+    }
+  };
+
   if (onClick) {
     return (
       <button type="button" onClick={onClick} className="w-full text-left">
@@ -97,7 +115,7 @@ function NavItem({ href, onClick, icon: Icon, label, badge, badgeColor = "primar
   }
 
   return (
-    <Link href={href || "#"} className="block">
+    <Link href={href || "#"} onClick={handleLinkClick} className="block">
       {content}
     </Link>
   );

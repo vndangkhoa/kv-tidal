@@ -236,7 +236,14 @@ async fn fetch_audio_flac_ytdlp(
     let template = format!("{}.%(ext)s", temp_stem);
     let query = format!("ytsearch1:{} {}", artist, title);
 
-    let mut child = tokio::process::Command::new("yt-dlp")
+    let yt_binary = match crate::engines::stream_resolver::find_yt_dlp() {
+        Some(p) => p,
+        None => crate::engines::stream_resolver::bootstrap_yt_dlp()
+            .await
+            .unwrap_or_else(|| std::path::PathBuf::from("yt-dlp")),
+    };
+
+    let mut child = tokio::process::Command::new(&yt_binary)
         .args([
             &query,
             "-f", "ba/b",
@@ -249,7 +256,7 @@ async fn fetch_audio_flac_ytdlp(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("Failed to spawn yt-dlp: {}", e))?;
+        .map_err(|e| format!("Failed to spawn yt-dlp ({:?}): {}", yt_binary, e))?;
 
     if let Some(stdout) = child.stdout.take() {
         use tokio::io::AsyncBufReadExt;

@@ -84,7 +84,9 @@ export function PlaylistModal({ isOpen, onClose, playlist }: PlaylistModalProps)
       coverUrl: t.cover_url,
       streamUrl: `/api/stream?artist=${encodeURIComponent(t.artist)}&title=${encodeURIComponent(
         t.title
-      )}${t.stream_id ? `&id=${encodeURIComponent(t.stream_id)}` : ""}`,
+      )}${t.stream_id ? `&id=${encodeURIComponent(t.stream_id)}` : ""}${
+        t.preview_url ? `&url=${encodeURIComponent(t.preview_url)}` : ""
+      }`,
       duration: t.duration,
       bitDepth: t.bit_depth || 24,
       sampleRate: t.sample_rate || 96000,
@@ -201,18 +203,22 @@ export function PlaylistModal({ isOpen, onClose, playlist }: PlaylistModalProps)
 
           <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start space-y-4 sm:space-y-0 sm:space-x-6 text-center sm:text-left">
             {/* Playlist Square Cover */}
-            <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-2xl overflow-hidden border border-border/80 shadow-2xl shadow-black/80 flex-shrink-0 bg-card ring-1 ring-white/10">
+            <div className="relative w-32 h-32 sm:w-40 sm:h-40 rounded-2xl overflow-hidden border border-border/80 shadow-2xl shadow-black/80 flex-shrink-0 bg-card ring-1 ring-white/10 flex items-center justify-center">
               {playlist.coverUrl ? (
                 <img
                   src={playlist.coverUrl}
                   alt={playlist.title}
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                    const fallback = e.currentTarget.parentElement?.querySelector(".playlist-fallback");
+                    if (fallback) fallback.classList.remove("hidden");
+                  }}
                   className="w-full h-full object-cover"
                 />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  <ListMusic className="w-12 h-12 text-textSecondary" />
-                </div>
-              )}
+              ) : null}
+              <div className={`playlist-fallback ${playlist.coverUrl ? "hidden" : ""} w-full h-full flex items-center justify-center`}>
+                <ListMusic className="w-12 h-12 text-textSecondary" />
+              </div>
             </div>
 
             {/* Playlist Info */}

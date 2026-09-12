@@ -4,6 +4,23 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-14] - 2026-09-12
+
+### Added
+- **Sub-Millisecond Library API Caching**: Added pre-serialized JSON cache and zero-allocation ASCII sorting for `/api/library/tracks`, accelerating library queries of 10,000+ songs from 400ms down to < 1ms.
+- **Dedicated Album Details Endpoint (`/api/library/album`)**: Added high-speed endpoint retrieving full album metadata and sorted tracklists for instant modal rendering.
+- **Persistent Cover Art Disk Cache**: Cached extracted embedded audio artwork and Apple Music CDN covers into `${DATA_DIR}/covers/` with 24-hour HTTP cache headers.
+- **Interactive Library Alphabet Scroller**: Built responsive A-Z quick-jump scroller supporting Vietnamese diacritics and numeric symbols for effortless navigation across massive collections.
+- **Virtualized Library Tracklist & Album Modal**: High-performance chunked track rendering in `/library` with instant modal inspection, multi-track playback, and seamless cover art sync.
+
+### Fixed
+- **Online Music Streaming 404 Resolution**: Fixed issue where online Tidal and trending tracks failed to play on Synology NAS with HTTP 404.
+- **Bundled `yt-dlp` in SPK Package**: Bundled standalone Linux x86_64 `yt-dlp` binary directly inside `/var/packages/kvtidal/target/bin/yt-dlp` for native DSM packages.
+- **Multi-Path `yt-dlp` Locator & Auto-Bootstrap**: `StreamResolver` and `DownloadEngine` now search package target directories, standard DSM paths, Entware `/opt/bin`, and auto-bootstrap standalone binaries to `${DATA_DIR}/bin/yt-dlp` if missing.
+- **Tidal Track ID Normalization**: Fixed track ID matching in `/api/stream` to accept both raw numeric IDs (`64325938`) and prefixed IDs (`tidal-64325938`).
+- **Dynamic Apple Music Preview Fallback**: Added 4th tier fallback resolving high-bitrate AAC streams directly from Apple Music CDN when YouTube/Tidal stream extraction is unavailable, preventing 404 errors.
+- **Frontend Stream Parameter Alignment**: Forwarded available `preview_url` across all player queues in `PopularArtistsView`, `page.tsx`, `ArtistModal`, and `PlaylistModal`.
+
 ## [1.0.0-11] - 2026-09-12
 
 ### Added

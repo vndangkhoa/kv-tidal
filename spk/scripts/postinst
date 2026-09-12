@@ -108,7 +108,7 @@ if [ -f "/var/packages/${PACKAGE}/INFO" ]; then
     sed -i "s/^adminport=.*/adminport=\"${PORT}\"/" "/var/packages/${PACKAGE}/INFO"
 fi
 
-chmod +x "${INSTALL_DIR}/bin/kv-tidal" 2>/dev/null || true
+chmod +x "${INSTALL_DIR}/bin/"* 2>/dev/null || true
 chmod 755 "/var/packages/${PACKAGE}/scripts/"* 2>/dev/null || true
 
 chown -R sc-kvtidal:synocache "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true

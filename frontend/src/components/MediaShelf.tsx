@@ -63,17 +63,21 @@ export function MediaShelf({ title, subtitle, items, onViewAll }: MediaShelfProp
                   <img
                     src={item.coverUrl}
                     alt={item.title}
+                    onError={(e) => {
+                      e.currentTarget.style.display = "none";
+                      const fallback = e.currentTarget.parentElement?.querySelector(".shelf-fallback");
+                      if (fallback) fallback.classList.remove("hidden");
+                    }}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    {isArtist ? (
-                      <User className="w-10 h-10 text-textSecondary" />
-                    ) : (
-                      <Disc className="w-10 h-10 text-textSecondary" />
-                    )}
-                  </div>
-                )}
+                ) : null}
+                <div className={`shelf-fallback ${item.coverUrl ? "hidden" : ""} w-full h-full flex items-center justify-center bg-card`}>
+                  {isArtist ? (
+                    <User className="w-10 h-10 text-textSecondary" />
+                  ) : (
+                    <Disc className="w-10 h-10 text-textSecondary" />
+                  )}
+                </div>
 
                 {/* TIDAL Round Cyan Hover Play Button (Bottom Right) */}
                 <div

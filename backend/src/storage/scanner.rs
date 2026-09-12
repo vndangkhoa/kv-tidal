@@ -55,6 +55,8 @@ pub struct LibraryStore {
     pub albums: HashMap<String, LibraryAlbum>,
     pub artists: HashMap<String, LibraryArtist>,
     pub is_scanning: bool,
+    #[serde(skip)]
+    pub cached_tracks_json: Option<Arc<String>>,
 }
 
 pub type SharedLibrary = Arc<RwLock<LibraryStore>>;
@@ -110,6 +112,88 @@ pub fn save_metadata_cache(cache: &FileMetadataCache) {
             let _ = std::fs::rename(temp_path, path);
         }
     }
+}
+
+pub fn find_sidecar_cover(parent_dir: &Path) -> Option<PathBuf> {
+    if !parent_dir.exists() || !parent_dir.is_dir() {
+        return None;
+    }
+
+    // 1. Check direct directory
+    if let Some(found) = check_dir_for_cover(parent_dir) {
+        return Some(found);
+    }
+
+    // 2. Check parent directory if subdisc (e.g. CD1, CD2, Disc 1, Mat A, Side B)
+    let dir_name = parent_dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if dir_name.starts_with("cd")
+        || dir_name.starts_with("disc")
+        || dir_name.starts_with("disk")
+        || dir_name.starts_with("mat ")
+        || dir_name.starts_with("side")
+        || dir_name.starts_with("part")
+    {
+        if let Some(grandparent) = parent_dir.parent() {
+            if let Some(found) = check_dir_for_cover(grandparent) {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
+fn check_dir_for_cover(dir: &Path) -> Option<PathBuf> {
+    // Fast path for exact common names first (case-sensitive)
+    for name in &[
+        "cover.jpg", "folder.jpg", "Cover.jpg", "Folder.jpg",
+        "cover.png", "folder.png", "Cover.png", "Folder.png",
+        "front.jpg", "Front.jpg", "front.png", "Front.png",
+        "artwork.jpg", "albumart.jpg", "cover.jpeg", "folder.jpeg",
+    ] {
+        let p = dir.join(name);
+        if p.exists() && p.is_file() {
+            return Some(p);
+        }
+    }
+
+    // Fallback: Case-insensitive scan of image files in directory
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut first_image = None;
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+                    let ext_lower = ext.to_lowercase();
+                    if matches!(ext_lower.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+                        let stem = p
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if stem.contains("cover")
+                            || stem.contains("folder")
+                            || stem.contains("front")
+                            || stem.contains("artwork")
+                            || stem.contains("album")
+                            || stem.contains("scan")
+                        {
+                            return Some(p);
+                        }
+                        if first_image.is_none() {
+                            first_image = Some(p);
+                        }
+                    }
+                }
+            }
+        }
+        return first_image;
+    }
+
+    None
 }
 
 pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<LibraryAlbum>, Vec<LibraryArtist>) {
@@ -185,28 +269,15 @@ pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<Librar
 
                     let album_key = format!("{} - {}", track.artist, track.album);
                     let parent_dir = path.parent();
-                    let cover_path = parent_dir.and_then(|p| {
-                        let c1 = p.join("cover.jpg");
-                        let c2 = p.join("folder.jpg");
-                        let c3 = p.join("Cover.jpg");
-                        let c4 = p.join("Folder.jpg");
-                        if c1.exists() {
-                            Some(c1)
-                        } else if c2.exists() {
-                            Some(c2)
-                        } else if c3.exists() {
-                            Some(c3)
-                        } else if c4.exists() {
-                            Some(c4)
-                        } else {
-                            None
-                        }
-                    });
+                    let cover_path = parent_dir.and_then(find_sidecar_cover);
 
                     let album_entry = album_map
                         .entry(album_key)
-                        .or_insert((track.album.clone(), track.artist.clone(), track.year, cover_path, 0));
+                        .or_insert((track.album.clone(), track.artist.clone(), track.year, cover_path.clone(), 0));
                     album_entry.4 += 1;
+                    if album_entry.3.is_none() && cover_path.is_some() {
+                        album_entry.3 = cover_path;
+                    }
 
                     *artist_tracks.entry(track.artist.clone()).or_insert(0) += 1;
                     tracks.push(track);

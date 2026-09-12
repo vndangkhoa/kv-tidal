@@ -154,3 +154,73 @@ async fn test_download_queue_lifecycle() {
     }
 }
 
+#[test]
+fn test_find_sidecar_cover() {
+    let dir = tempdir().unwrap();
+    let album_dir = dir.path().join("Artist - Album");
+    fs::create_dir_all(&album_dir).unwrap();
+
+    // 1. Initially no cover
+    assert!(kv_tidal::storage::scanner::find_sidecar_cover(&album_dir).is_none());
+
+    // 2. Case-insensitive non-standard sidecar e.g. front.png
+    let front_png = album_dir.join("front.png");
+    fs::write(&front_png, b"mock_png_data").unwrap();
+    let found = kv_tidal::storage::scanner::find_sidecar_cover(&album_dir);
+    assert_eq!(found, Some(front_png.clone()));
+
+    // 3. Subdisc folder CD1 should find parent album cover
+    let cd1_dir = album_dir.join("CD1");
+    fs::create_dir_all(&cd1_dir).unwrap();
+    let found_from_subdisc = kv_tidal::storage::scanner::find_sidecar_cover(&cd1_dir);
+    assert_eq!(found_from_subdisc, Some(front_png));
+}
+
+#[tokio::test]
+async fn test_aiff_transcode_and_scanner() {
+    let dir = tempdir().unwrap();
+    let aiff_path = dir.path().join("test_track.aiff");
+
+    // Generate a minimal valid AIFF file using ffmpeg
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-f", "lavfi",
+            "-i", "sine=frequency=1000:duration=0.5:sample_rate=44100",
+            "-c:a", "pcm_s16be",
+            "-y",
+            aiff_path.to_str().unwrap(),
+        ])
+        .output();
+
+    if let Ok(out) = status {
+        if out.status.success() {
+            let track = kv_tidal::storage::scanner::inspect_audio_file(&aiff_path, "aiff");
+            assert!(track.is_some(), "Scanner should scan .aiff file");
+            let t = track.unwrap();
+            assert_eq!(t.format, "aiff");
+            assert_eq!(t.sample_rate, Some(44100));
+
+            // Transcode to FLAC via ffmpeg as stream.rs does
+            let flac_path = dir.path().join("transcoded.flac");
+            let transcode_status = std::process::Command::new("ffmpeg")
+                .args([
+                    "-ss", "0",
+                    "-i", aiff_path.to_str().unwrap(),
+                    "-vn",
+                    "-c:a", "flac",
+                    "-compression_level", "5",
+                    "-f", "flac",
+                    "-y",
+                    flac_path.to_str().unwrap(),
+                ])
+                .output();
+
+            assert!(transcode_status.is_ok());
+            assert!(transcode_status.unwrap().status.success());
+            assert!(flac_path.exists());
+            assert!(fs::metadata(&flac_path).unwrap().len() > 500);
+        }
+    }
+}
+
+

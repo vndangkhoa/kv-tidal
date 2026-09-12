@@ -18,7 +18,16 @@ pub struct StreamRequest {
 }
 
 fn find_ffmpeg() -> Option<PathBuf> {
-    for candidate in &["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"] {
+    for candidate in &[
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/bin/ffmpeg",
+        "/usr/syno/bin/ffmpeg",
+        "/var/packages/ffmpeg/target/bin/ffmpeg",
+        "/var/packages/ffmpeg6/target/bin/ffmpeg",
+        "/var/packages/ffmpeg7/target/bin/ffmpeg",
+        "ffmpeg",
+    ] {
         let p = PathBuf::from(candidate);
         if p.is_absolute() && p.exists() {
             return Some(p);
@@ -58,6 +67,7 @@ fn get_audio_mime_type(path: &Path) -> &'static str {
         "opus" => "audio/opus",
         "aiff" | "aif" => "audio/aiff",
         "dsf" | "dff" => "audio/flac",
+        "ape" | "wv" => "audio/flac",
         _ => "audio/flac",
     }
 }
@@ -129,15 +139,32 @@ async fn handle_stream(
         if track.file_path.exists() {
             if let Ok(meta) = std::fs::metadata(&track.file_path) {
                 if meta.len() > 1024 {
+                    let ext = track
+                        .file_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+
                     let is_dsd = track.is_dsd
                         || track.format.eq_ignore_ascii_case("dsf")
                         || track.format.eq_ignore_ascii_case("dff")
-                        || track.file_path.extension().and_then(|e| e.to_str()).map(|e| {
-                            let el = e.to_lowercase();
-                            el == "dsf" || el == "dff"
-                        }).unwrap_or(false);
+                        || ext == "dsf"
+                        || ext == "dff";
 
-                    let (file_to_serve, is_transcoded) = if is_dsd {
+                    let is_aiff = track.format.eq_ignore_ascii_case("aiff")
+                        || track.format.eq_ignore_ascii_case("aif")
+                        || ext == "aiff"
+                        || ext == "aif";
+
+                    let is_other_lossless = track.format.eq_ignore_ascii_case("ape")
+                        || track.format.eq_ignore_ascii_case("wv")
+                        || ext == "ape"
+                        || ext == "wv";
+
+                    let needs_transcode = is_dsd || is_aiff || is_other_lossless;
+
+                    let (file_to_serve, is_transcoded) = if needs_transcode {
                         let cache_dir = get_dsd_cache_dir();
                         let flac_name = format!("{}.flac", track.id);
                         let cached_flac = cache_dir.join(&flac_name);
@@ -153,23 +180,43 @@ async fn handle_stream(
 
                         if !ready {
                             if let Some(ffmpeg) = find_ffmpeg() {
-                                tracing::info!("Transcoding DSD to 24-bit/88.2kHz FLAC for track '{}': {:?}", track.title, track.file_path);
                                 let tmp_name = format!("{}.{}.tmp.flac", track.id, uuid::Uuid::new_v4());
                                 let tmp_file = cache_dir.join(&tmp_name);
 
-                                let status = tokio::process::Command::new(ffmpeg)
-                                    .arg("-ss").arg("0")
+                                let mut cmd = tokio::process::Command::new(ffmpeg);
+                                cmd.arg("-ss").arg("0")
                                     .arg("-i").arg(&track.file_path)
-                                    .arg("-vn")
-                                    .arg("-c:a").arg("flac")
-                                    .arg("-sample_fmt").arg("s32")
-                                    .arg("-ar").arg("88200")
-                                    .arg("-compression_level").arg("5")
-                                    .arg("-f").arg("flac")
-                                    .arg("-y")
-                                    .arg(&tmp_file)
-                                    .status()
-                                    .await;
+                                    .arg("-vn");
+
+                                if is_dsd {
+                                    tracing::info!(
+                                        "Transcoding DSD to 24-bit/88.2kHz FLAC for track '{}': {:?}",
+                                        track.title,
+                                        track.file_path
+                                    );
+                                    cmd.arg("-c:a").arg("flac")
+                                        .arg("-sample_fmt").arg("s32")
+                                        .arg("-ar").arg("88200")
+                                        .arg("-compression_level").arg("5")
+                                        .arg("-f").arg("flac")
+                                        .arg("-y")
+                                        .arg(&tmp_file);
+                                } else {
+                                    let fmt_name = track.format.to_uppercase();
+                                    tracing::info!(
+                                        "Transcoding {} to bit-perfect FLAC for track '{}': {:?}",
+                                        fmt_name,
+                                        track.title,
+                                        track.file_path
+                                    );
+                                    cmd.arg("-c:a").arg("flac")
+                                        .arg("-compression_level").arg("5")
+                                        .arg("-f").arg("flac")
+                                        .arg("-y")
+                                        .arg(&tmp_file);
+                                }
+
+                                let status = cmd.status().await;
 
                                 if let Ok(st) = status {
                                     if st.success() {
@@ -178,11 +225,11 @@ async fn handle_stream(
                                         }
                                     } else {
                                         let _ = tokio::fs::remove_file(&tmp_file).await;
-                                        tracing::warn!("FFmpeg DSD transcode failed: {:?}", st);
+                                        tracing::warn!("FFmpeg transcode failed: {:?}", st);
                                     }
                                 } else {
                                     let _ = tokio::fs::remove_file(&tmp_file).await;
-                                    tracing::warn!("Failed to invoke FFmpeg for DSD transcode");
+                                    tracing::warn!("Failed to invoke FFmpeg for transcode");
                                 }
                             }
                         }
@@ -206,10 +253,22 @@ async fn handle_stream(
                     headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
 
                     if is_transcoded {
-                        headers.insert("x-audio-format", "FLAC (DSD64 Transcoded)".parse().unwrap());
-                        headers.insert("x-audio-source", "nas-local-dsd-transcoded".parse().unwrap());
-                        headers.insert("x-audio-bit-depth", "24".parse().unwrap());
-                        headers.insert("x-audio-sample-rate", "88200".parse().unwrap());
+                        if is_dsd {
+                            headers.insert("x-audio-format", "FLAC (DSD64 Transcoded)".parse().unwrap());
+                            headers.insert("x-audio-source", "nas-local-dsd-transcoded".parse().unwrap());
+                            headers.insert("x-audio-bit-depth", "24".parse().unwrap());
+                            headers.insert("x-audio-sample-rate", "88200".parse().unwrap());
+                        } else {
+                            let fmt_disp = format!("FLAC ({} Bit-Perfect)", track.format.to_uppercase());
+                            headers.insert("x-audio-format", fmt_disp.parse().unwrap());
+                            headers.insert("x-audio-source", "nas-local-lossless-transcoded".parse().unwrap());
+                            if let Some(bd) = track.bit_depth {
+                                headers.insert("x-audio-bit-depth", bd.to_string().parse().unwrap());
+                            }
+                            if let Some(sr) = track.sample_rate {
+                                headers.insert("x-audio-sample-rate", sr.to_string().parse().unwrap());
+                            }
+                        }
                     } else {
                         headers.insert("x-audio-format", track.format.to_uppercase().parse().unwrap());
                         headers.insert("x-audio-source", "nas-local-bitperfect".parse().unwrap());
@@ -233,9 +292,9 @@ async fn handle_stream(
 
     // Direct Tidal Stream Resolution if track_id is provided
     if let Some(id) = &query.id {
-        if id.starts_with("tidal-") {
-            let real_id = id.trim_start_matches("tidal-");
-            if let Ok(tidal_stream) = state.tidal.resolve_stream_url(real_id, None).await {
+        let clean_id = id.trim_start_matches("tidal-");
+        if !clean_id.is_empty() && clean_id.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(tidal_stream) = state.tidal.resolve_stream_url(clean_id, None).await {
                 return proxy_stream(&tidal_stream, req).await;
             }
         }
@@ -252,6 +311,21 @@ async fn handle_stream(
     if let Some(direct_url) = &query.url {
         if !direct_url.is_empty() {
             return proxy_stream(direct_url, req).await;
+        }
+    }
+
+    // 4. Dynamic metadata fallback: resolve high-quality preview stream from Apple Music CDN (zero-404 guarantee)
+    if !title.is_empty() {
+        let search_term = if !artist.is_empty() {
+            format!("{} {}", artist, title)
+        } else {
+            title.to_string()
+        };
+        if let Some(meta) = state.metadata.resolve_apple_music(&search_term).await {
+            if let Some(preview_url) = meta.preview_url {
+                tracing::info!("Falling back to Apple Music stream for '{} - {}'", artist, title);
+                return proxy_stream(&preview_url, req).await;
+            }
         }
     }
 

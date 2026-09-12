@@ -29,7 +29,7 @@ interface TrackRowProps {
   queueContext?: PlayableTrack[];
 }
 
-export function TrackRow({
+export const TrackRow = React.memo(function TrackRow({
   rank,
   title,
   artist,
@@ -193,6 +193,8 @@ export function TrackRow({
             <img
               src={coverUrl}
               alt={title}
+              loading="lazy"
+              decoding="async"
               onError={() => setImgError(true)}
               className="w-full h-full object-cover group-hover/cover:scale-105 transition-transform"
             />
@@ -372,4 +374,4 @@ export function TrackRow({
       </div>
     </div>
   );
-}
+});
