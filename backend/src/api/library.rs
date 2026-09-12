@@ -63,14 +63,23 @@ async fn add_library_path(
             for l in &mut cfg.libraries {
                 l.is_download_target = false;
             }
+            cfg.download_dir = p.clone();
         }
-        cfg.libraries.push(LibraryConfig {
-            name: payload.name.clone(),
-            path: p.clone(),
-            is_download_target,
-            watch_changes: true,
-        });
-        let _ = cfg.save(cfg.data_dir.join("config.json"));
+        if let Some(existing) = cfg.libraries.iter_mut().find(|l| l.path == p) {
+            existing.name = payload.name.clone();
+            existing.is_download_target = is_download_target;
+        } else {
+            cfg.libraries.push(LibraryConfig {
+                name: payload.name.clone(),
+                path: p.clone(),
+                is_download_target,
+                watch_changes: true,
+            });
+        }
+        let config_path = std::env::var("CONFIG_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| cfg.data_dir.join("config.json"));
+        let _ = cfg.save(&config_path);
     }
 
     // Trigger immediate scan of this new library path in background

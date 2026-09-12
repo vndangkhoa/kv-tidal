@@ -56,22 +56,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let lib_store = library.clone();
         let cfg_store = config.clone();
         tokio::spawn(async move {
-            let cfg = cfg_store.read().await;
-            for lib in &cfg.libraries {
-                if lib.path.exists() {
-                    let (tracks, albums, artists) = storage::scanner::scan_directory(&lib.path);
-                    let mut store = lib_store.write().await;
-                    for t in tracks {
-                        store.tracks.insert(t.id.clone(), t);
-                    }
-                    for a in albums {
-                        store.albums.insert(a.id.clone(), a);
-                    }
-                    for ar in artists {
-                        store.artists.insert(ar.id.clone(), ar);
+            let libraries = {
+                let cfg = cfg_store.read().await;
+                cfg.libraries.clone()
+            };
+            tokio::task::spawn_blocking(move || {
+                for lib in &libraries {
+                    if lib.path.exists() {
+                        let (tracks, albums, artists) = storage::scanner::scan_directory(&lib.path);
+                        let rt = tokio::runtime::Handle::current();
+                        rt.block_on(async {
+                            let mut store = lib_store.write().await;
+                            for t in tracks {
+                                store.tracks.insert(t.id.clone(), t);
+                            }
+                            for a in albums {
+                                store.albums.insert(a.id.clone(), a);
+                            }
+                            for ar in artists {
+                                store.artists.insert(ar.id.clone(), ar);
+                            }
+                        });
                     }
                 }
-            }
+            });
         });
     }
 

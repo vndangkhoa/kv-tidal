@@ -22,8 +22,14 @@ if [ -d "$ROOT_DIR/spk/ui" ]; then
     cp -r "$ROOT_DIR/spk/ui/"* "$STAGE_DIR/package/ui/"
 fi
 
-# Prefer extracting GLIBC 2.36 compatible binary from docker image if available
-if docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then
+if [ -f "$ROOT_DIR/backend/target/release/kv-tidal" ]; then
+    echo "Using freshly compiled Bookworm release binary from backend/target/release/kv-tidal..."
+    cp "$ROOT_DIR/backend/target/release/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
+    if [ -d "$ROOT_DIR/frontend/out" ]; then
+        echo "Using fresh frontend build from frontend/out..."
+        cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
+    fi
+elif docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then
     echo "Using Debian Bookworm (GLIBC 2.36 compatible) binary from docker image..."
     CID=$(docker create vndangkhoa/kv-tidal:latest)
     docker cp "$CID:/app/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"

@@ -4,12 +4,12 @@
     "items": [
       {
         "type": "textfield",
-        "desc": "Existing Synology Music Folder Path (where your music is stored and downloaded):",
+        "desc": "Synology Music Shared Folder Path (where your music is stored and downloaded):",
         "subitems": [
           {
             "key": "wizard_music_dir",
-            "desc": "Music folder path",
-            "defaultValue": "/volume1/music",
+            "desc": "Music folder path (e.g. /volume2/music)",
+            "defaultValue": "/volume2/music",
             "validator": {
               "allowBlank": false
             }
@@ -22,8 +22,8 @@
         "subitems": [
           {
             "key": "wizard_port",
-            "desc": "Port number",
-            "defaultValue": "8080",
+            "desc": "Port number (e.g. 26784)",
+            "defaultValue": "26784",
             "validator": {
               "allowBlank": false
             }

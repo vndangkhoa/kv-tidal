@@ -6,8 +6,31 @@ VAR_DIR="/var/packages/${PACKAGE}/var"
 
 mkdir -p "$ETC_DIR" "$VAR_DIR"
 
-MUSIC_DIR="${wizard_music_dir:-${SYNOPKG_PKG_VAR_wizard_music_dir:-${SYNOPKG_PKG_VAR_music_dir:-/volume1/music}}}"
-PORT="${wizard_port:-${SYNOPKG_PKG_VAR_wizard_port:-${SYNOPKG_PKG_VAR_port:-8080}}}"
+# Auto-detect real music shared folder if left empty or default
+DETECTED_MUSIC=""
+if [ -x "/usr/syno/sbin/synoshare" ]; then
+    DETECTED_MUSIC="$(/usr/syno/sbin/synoshare --get music 2>/dev/null | awk -F'[\\[\\]]' '/Path/{print $2}')"
+fi
+if [ -z "$DETECTED_MUSIC" ]; then
+    for v in /volume2 /volume1 /volume3 /volume4; do
+        if [ -d "$v/music" ]; then
+            DETECTED_MUSIC="$v/music"
+            break
+        fi
+    done
+fi
+[ -z "$DETECTED_MUSIC" ] && DETECTED_MUSIC="/volume2/music"
+
+USER_MUSIC_DIR="${wizard_music_dir:-${SYNOPKG_PKG_VAR_wizard_music_dir:-${SYNOPKG_PKG_VAR_music_dir:-}}}"
+if [ -z "$USER_MUSIC_DIR" ]; then
+    MUSIC_DIR="$DETECTED_MUSIC"
+elif [ "$USER_MUSIC_DIR" = "/volume1/music" ] && [ "$DETECTED_MUSIC" != "/volume1/music" ] && [ -d "$DETECTED_MUSIC" ]; then
+    MUSIC_DIR="$DETECTED_MUSIC"
+else
+    MUSIC_DIR="$USER_MUSIC_DIR"
+fi
+
+PORT="${wizard_port:-${SYNOPKG_PKG_VAR_wizard_port:-${SYNOPKG_PKG_VAR_port:-26784}}}"
 SUB_USER="${wizard_sub_user:-${SYNOPKG_PKG_VAR_wizard_sub_user:-${SYNOPKG_PKG_VAR_subsonic_user:-admin}}}"
 SUB_PASS="${wizard_sub_pass:-${SYNOPKG_PKG_VAR_wizard_sub_pass:-${SYNOPKG_PKG_VAR_subsonic_pass:-admin}}}"
 
@@ -48,8 +71,18 @@ else
   fi
   if [ -n "$MUSIC_DIR" ]; then
     sed -i -E "s|\"download_dir\":[[:space:]]*\"[^\"]*\"|\"download_dir\": \"${MUSIC_DIR}\"|" "$CONFIG_FILE"
+    sed -i -E "s|\"path\":[[:space:]]*\"/volume[0-9]+/music\"|\"path\": \"${MUSIC_DIR}\"|" "$CONFIG_FILE"
   fi
 fi
+
+# Ensure sc-kvtidal has full ACL permissions on the music directory
+if [ -d "$MUSIC_DIR" ]; then
+    if [ -x "/usr/syno/bin/synoacltool" ]; then
+        /usr/syno/bin/synoacltool -add "$MUSIC_DIR" "user:sc-kvtidal:allow:rwxpdDaARWc--:fd--" 2>/dev/null || true
+    fi
+    chmod 775 "$MUSIC_DIR" 2>/dev/null || true
+fi
+
 
 
 lan_ip() {

@@ -131,7 +131,7 @@ async fn browse_directory(
         )
     })?;
 
-    let lib_guard = state.library.read().await;
+    let lib_guard = state.library.try_read().ok();
 
     while let Ok(Some(entry)) = dir.next_entry().await {
         let meta = entry.metadata().await.ok();
@@ -164,9 +164,8 @@ async fn browse_directory(
                 None, None, None, None, None, None, None, None, None, None, None, None,
             )
         } else if let Some(track) = lib_guard
-            .tracks
-            .values()
-            .find(|t| t.file_path.to_string_lossy() == path)
+            .as_ref()
+            .and_then(|g| g.tracks.values().find(|t| t.file_path.to_string_lossy() == path))
         {
             (
                 Some(track.format.to_uppercase()),

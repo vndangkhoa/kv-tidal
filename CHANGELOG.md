@@ -4,6 +4,13 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-7] - 2026-09-12
+
+### Added
+- **Music Share Auto-Detection**: Setup wizard now defaults to `/volume2/music` (the active Synology music share), and automatically verifies path existence via `synoshare`.
+- **Automatic ACL Permissions**: Automatically grants `sc-kvtidal` read/write POSIX ACL permissions (`synoacltool`) on the music directory during installation to prevent permission errors.
+- **Non-blocking File Explorer**: Background scanning of tens of thousands of tracks no longer stalls file browsing or HTTP API routes.
+
 ## [1.0.0-6] - 2026-09-12
 
 ### Fixed
