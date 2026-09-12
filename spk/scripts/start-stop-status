@@ -15,6 +15,14 @@ start_daemon() {
     export WEB_DIR="${INSTALL_DIR}/web"
     export RUST_LOG="info"
 
+    # Synchronize DSM UI launcher port with actual configured port
+    if [ -f "$CONFIG_PATH" ] && [ -f "${INSTALL_DIR}/ui/config" ]; then
+        CFG_PORT="$(grep -oE '"port":[[:space:]]*[0-9]+' "$CONFIG_PATH" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')"
+        if [ -n "$CFG_PORT" ]; then
+            sed -i -E "s|:[0-9]+/?\"|:${CFG_PORT}/\"|g" "${INSTALL_DIR}/ui/config"
+        fi
+    fi
+
     nohup "$DAEMON" >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
 }

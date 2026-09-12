@@ -4,6 +4,17 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-4] - 2026-09-12
+
+### Fixed
+- **Port Synchronization**: Synchronized user-configured port in the installation wizard with `config.json` and DSM `ui/config` launcher URL to prevent connection failures when custom ports are used.
+- **Service Port Watcher**: `start-stop-status` dynamically aligns DSM menu launcher shortcut with the active port in `config.json`.
+
+## [1.0.0-3] - 2026-09-12
+
+### Added
+- **DSM Main-Menu Launcher**: Added multi-resolution application icons (16px to 256px) and DSM application registration (`com.khoavo.kvtidal`) so the package appears in the Synology main menu.
+
 ## [1.0.0] - 2026-09-12
 
 ### Added

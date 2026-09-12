@@ -35,7 +35,22 @@ cat > "$CONFIG_FILE" << CONFIG_EOF
   ]
 }
 CONFIG_EOF
+else
+  # If config.json already exists from previous install, synchronize with wizard parameters
+  if [ -n "$PORT" ]; then
+    sed -i -E "s/\"port\":[[:space:]]*[0-9]+/\"port\": ${PORT}/" "$CONFIG_FILE"
+  fi
+  if [ -n "$SUB_USER" ]; then
+    sed -i -E "s/\"subsonic_user\":[[:space:]]*\"[^\"]*\"/\"subsonic_user\": \"${SUB_USER}\"/" "$CONFIG_FILE"
+  fi
+  if [ -n "$SUB_PASS" ]; then
+    sed -i -E "s/\"subsonic_password\":[[:space:]]*\"[^\"]*\"/\"subsonic_password\": \"${SUB_PASS}\"/" "$CONFIG_FILE"
+  fi
+  if [ -n "$MUSIC_DIR" ]; then
+    sed -i -E "s|\"download_dir\":[[:space:]]*\"[^\"]*\"|\"download_dir\": \"${MUSIC_DIR}\"|" "$CONFIG_FILE"
+  fi
 fi
+
 
 lan_ip() {
     LAN_IP=""

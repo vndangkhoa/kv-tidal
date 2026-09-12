@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 PKG_NAME="kvtidal"
-VERSION="1.0.0-3"
+VERSION="$(grep '^version=' "$ROOT_DIR/spk/INFO" | cut -d'"' -f2)"
+[ -z "$VERSION" ] && VERSION="1.0.0-4"
 ARCH="x64"
 DSM_VER="7.2"
 
