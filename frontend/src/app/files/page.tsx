@@ -39,7 +39,17 @@ import {
   Copy,
   ExternalLink,
   ZoomIn,
+  Scissors,
+  ClipboardPaste,
+  Columns2,
+  ArrowRightLeft,
+  FolderOpen,
 } from "lucide-react";
+import {
+  FileContextMenu,
+  ContextMenuPosition,
+  ContextMenuTarget,
+} from "@/components/files/FileContextMenu";
 
 export interface ColumnItem {
   path: string;
@@ -57,11 +67,35 @@ export default function FilesPage() {
   const [diskSpace, setDiskSpace] = useState<DiskUsage | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // View Mode: 'columns' (macOS Finder style) | 'list' (Classic Table)
-  const [viewMode, setViewMode] = useState<"columns" | "list">("columns");
+  // View Mode: 'columns' (macOS Finder style) | 'list' (Classic Table) | 'split' (Dual Pane)
+  const [viewMode, setViewMode] = useState<"columns" | "list" | "split">("columns");
   const [columnHistory, setColumnHistory] = useState<ColumnItem[]>([]);
   const [quickLookFile, setQuickLookFile] = useState<FsEntry | null>(null);
   const columnsContainerRef = useRef<HTMLDivElement>(null);
+
+  // Clipboard Engine State (Cut / Copy / Move)
+  const [clipboard, setClipboard] = useState<{
+    action: "cut" | "copy";
+    paths: string[];
+    sourceDir: string;
+  } | null>(null);
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    position: ContextMenuPosition;
+    target: ContextMenuTarget;
+  } | null>(null);
+
+  // Split View (Dual-Pane) State
+  const [activePane, setActivePane] = useState<"left" | "right">("left");
+  const [paneBPath, setPaneBPath] = useState<string>("");
+  const [paneBParentPath, setPaneBParentPath] = useState<string | null>(null);
+  const [paneBEntries, setPaneBEntries] = useState<FsEntry[]>([]);
+  const [paneBLoading, setPaneBLoading] = useState<boolean>(false);
+  const [paneBSelectedPaths, setPaneBSelectedPaths] = useState<Set<string>>(new Set());
+  const [paneBSearchQuery, setPaneBSearchQuery] = useState<string>("");
+  const [paneBSortField, setPaneBSortField] = useState<"name" | "size" | "format" | "date">("name");
+  const [paneBSortAsc, setPaneBSortAsc] = useState<boolean>(true);
 
   // Tag Editor State
   const [tagEditFile, setTagEditFile] = useState<FsEntry | null>(null);
@@ -148,10 +182,32 @@ export default function FilesPage() {
     }
   };
 
+  const loadPaneBDirectory = async (path?: string) => {
+    setPaneBLoading(true);
+    setPaneBSelectedPaths(new Set());
+    try {
+      const url = path ? `/api/fs/browse?path=${encodeURIComponent(path)}` : `/api/fs/browse`;
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const data = await resp.json();
+        setPaneBPath(data.current_path || "");
+        setPaneBParentPath(data.parent_path || null);
+        setPaneBEntries(data.entries || []);
+      }
+    } catch (e) {
+      console.error("Pane B Browse failed:", e);
+    } finally {
+      setPaneBLoading(false);
+    }
+  };
+
   useEffect(() => {
     const saved = localStorage.getItem("kvtidal_files_view_mode");
-    if (saved === "list" || saved === "columns") {
-      setViewMode(saved);
+    if (saved === "list" || saved === "columns" || saved === "split") {
+      setViewMode(saved as any);
+      if (saved === "split") {
+        loadPaneBDirectory();
+      }
     }
     loadDirectory();
   }, []);
@@ -649,10 +705,10 @@ export default function FilesPage() {
   };
 
   // Scan folder into library
-  const handleScanFolder = async () => {
+  const handleScanFolder = async (folderPath?: string) => {
     setIsScanning(true);
     try {
-      const target = currentPath || "./music";
+      const target = folderPath || currentPath || "./music";
       const resp = await fetch("/api/fs/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -733,12 +789,11 @@ export default function FilesPage() {
     return selectedEntries.reduce((sum, e) => sum + e.size_bytes, 0);
   }, [selectedEntries]);
 
-  // Clickable breadcrumbs
-  const breadcrumbs = useMemo(() => {
-    if (!currentPath) return [];
-    const isAbs = currentPath.startsWith("/");
-    // Filter out empty and current dir dot '.'
-    const parts = currentPath.split("/").filter((p) => p && p !== ".");
+  // Helper to parse breadcrumbs
+  const getBreadcrumbs = (path: string) => {
+    if (!path) return [];
+    const isAbs = path.startsWith("/");
+    const parts = path.split("/").filter((p) => p && p !== ".");
     const crumbs: { label: string; path: string }[] = [];
     let accumulated = isAbs ? "" : "";
     for (let i = 0; i < parts.length; i++) {
@@ -751,7 +806,294 @@ export default function FilesPage() {
       crumbs.push({ label: part, path: accumulated });
     }
     return crumbs;
-  }, [currentPath]);
+  };
+
+  const breadcrumbs = useMemo(() => getBreadcrumbs(currentPath), [currentPath]);
+  const paneBBreadcrumbs = useMemo(() => getBreadcrumbs(paneBPath), [paneBPath]);
+
+  // Pane B Filter and sort entries
+  const paneBFilteredEntries = useMemo(() => {
+    let result = paneBEntries;
+    if (paneBSearchQuery.trim()) {
+      const q = paneBSearchQuery.toLowerCase();
+      result = result.filter(
+        (e) =>
+          e.name.toLowerCase().includes(q) ||
+          (e.format && e.format.toLowerCase().includes(q)) ||
+          (e.artist && e.artist.toLowerCase().includes(q)) ||
+          (e.album && e.album.toLowerCase().includes(q))
+      );
+    }
+
+    return [...result].sort((a, b) => {
+      if (a.is_dir !== b.is_dir) {
+        return a.is_dir ? -1 : 1;
+      }
+      let cmp = 0;
+      if (paneBSortField === "name") {
+        if (a.track_number && b.track_number && a.track_number !== b.track_number) {
+          cmp = a.track_number - b.track_number;
+        } else {
+          cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+        }
+      } else if (paneBSortField === "size") {
+        cmp = a.size_bytes - b.size_bytes;
+      } else if (paneBSortField === "format") {
+        cmp = (a.format || "").localeCompare(b.format || "");
+      } else if (paneBSortField === "date") {
+        cmp = (a.modified_at || 0) - (b.modified_at || 0);
+      }
+      return paneBSortAsc ? cmp : -cmp;
+    });
+  }, [paneBEntries, paneBSearchQuery, paneBSortField, paneBSortAsc]);
+
+  const paneBSelectedEntries = useMemo(() => {
+    return paneBEntries.filter((e) => paneBSelectedPaths.has(e.path));
+  }, [paneBEntries, paneBSelectedPaths]);
+
+  const paneBSelectedTotalBytes = useMemo(() => {
+    return paneBSelectedEntries.reduce((sum, e) => sum + e.size_bytes, 0);
+  }, [paneBSelectedEntries]);
+
+  const togglePaneBSelectAll = () => {
+    if (paneBSelectedPaths.size === paneBFilteredEntries.length && paneBFilteredEntries.length > 0) {
+      setPaneBSelectedPaths(new Set());
+    } else {
+      setPaneBSelectedPaths(new Set(paneBFilteredEntries.map((e) => e.path)));
+    }
+  };
+
+  const togglePaneBSelectOne = (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = new Set(paneBSelectedPaths);
+    if (next.has(path)) {
+      next.delete(path);
+    } else {
+      next.add(path);
+    }
+    setPaneBSelectedPaths(next);
+  };
+
+  // Clipboard Actions (Cut / Copy / Paste)
+  const handleCut = (targetEntries?: FsEntry[]) => {
+    const items =
+      targetEntries && targetEntries.length > 0
+        ? targetEntries
+        : activePane === "left"
+        ? selectedEntries
+        : paneBSelectedEntries;
+
+    if (items.length === 0) {
+      showNotification("No items selected to Cut");
+      return;
+    }
+
+    const paths = items.map((i) => i.path);
+    const sourceDir = activePane === "left" ? currentPath : paneBPath;
+    setClipboard({ action: "cut", paths, sourceDir });
+    showNotification(`Cut ${paths.length} item(s). Navigate to target folder and paste.`);
+  };
+
+  const handleCopy = (targetEntries?: FsEntry[]) => {
+    const items =
+      targetEntries && targetEntries.length > 0
+        ? targetEntries
+        : activePane === "left"
+        ? selectedEntries
+        : paneBSelectedEntries;
+
+    if (items.length === 0) {
+      showNotification("No items selected to Copy");
+      return;
+    }
+
+    const paths = items.map((i) => i.path);
+    const sourceDir = activePane === "left" ? currentPath : paneBPath;
+    setClipboard({ action: "copy", paths, sourceDir });
+    showNotification(`Copied ${paths.length} item(s) to clipboard.`);
+  };
+
+  const handlePaste = async (destinationDir?: string) => {
+    if (!clipboard || clipboard.paths.length === 0) {
+      showNotification("Clipboard is empty");
+      return;
+    }
+
+    const dest = destinationDir || (activePane === "left" ? currentPath : paneBPath);
+    if (!dest) {
+      showNotification("No destination folder selected");
+      return;
+    }
+
+    try {
+      const resp = await fetch("/api/fs/batch-transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: clipboard.action,
+          paths: clipboard.paths,
+          destination_dir: dest,
+          conflict_resolution: "rename",
+        }),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        const actionLabel = clipboard.action === "cut" ? "Moved" : "Copied";
+        showNotification(
+          `${actionLabel} ${data.transferred_count} item(s) successfully to ${
+            dest.split("/").filter(Boolean).pop() || "destination"
+          }`
+        );
+        if (clipboard.action === "cut") {
+          setClipboard(null);
+        }
+        loadDirectory(currentPath);
+        if (viewMode === "split") {
+          loadPaneBDirectory(paneBPath);
+        }
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        showNotification(`Transfer failed: ${err.error || resp.statusText}`);
+      }
+    } catch (e: any) {
+      showNotification(`Transfer error: ${e?.message || "Connection error"}`);
+    }
+  };
+
+  // Cross-pane transfer (Split View)
+  const handleCrossPaneTransfer = async (
+    action: "copy" | "cut",
+    direction: "toRight" | "toLeft",
+    targetEntries?: FsEntry[]
+  ) => {
+    const srcEntries =
+      targetEntries && targetEntries.length > 0
+        ? targetEntries
+        : direction === "toRight"
+        ? selectedEntries
+        : paneBSelectedEntries;
+
+    if (srcEntries.length === 0) {
+      showNotification(`No items selected to ${action === "cut" ? "move" : "copy"}`);
+      return;
+    }
+
+    const dest = direction === "toRight" ? paneBPath : currentPath;
+    if (!dest) {
+      showNotification("Target directory not loaded");
+      return;
+    }
+
+    try {
+      const resp = await fetch("/api/fs/batch-transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          paths: srcEntries.map((e) => e.path),
+          destination_dir: dest,
+          conflict_resolution: "rename",
+        }),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        showNotification(
+          `${action === "cut" ? "Moved" : "Copied"} ${data.transferred_count} item(s) to ${
+            direction === "toRight" ? "Right Pane" : "Left Pane"
+          }`
+        );
+        loadDirectory(currentPath);
+        loadPaneBDirectory(paneBPath);
+        if (direction === "toRight") {
+          setSelectedPaths(new Set());
+        } else {
+          setPaneBSelectedPaths(new Set());
+        }
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        showNotification(`Transfer failed: ${err.error || resp.statusText}`);
+      }
+    } catch (e: any) {
+      showNotification(`Transfer error: ${e?.message || "Network error"}`);
+    }
+  };
+
+  // Context Menu trigger
+  const handleContextMenu = (
+    e: React.MouseEvent,
+    type: "file" | "folder" | "background",
+    entry?: FsEntry,
+    pane: "left" | "right" = "left"
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    setActivePane(pane);
+    const selectedSet = pane === "left" ? selectedPaths : paneBSelectedPaths;
+    const entryList = pane === "left" ? entries : paneBEntries;
+    const path = pane === "left" ? currentPath : paneBPath;
+
+    let selectedItems: FsEntry[] = [];
+    if (entry && selectedSet.has(entry.path)) {
+      selectedItems = entryList.filter((item) => selectedSet.has(item.path));
+    } else if (entry) {
+      selectedItems = [entry];
+      if (pane === "left") {
+        setSelectedPaths(new Set([entry.path]));
+      } else {
+        setPaneBSelectedPaths(new Set([entry.path]));
+      }
+    }
+
+    setContextMenu({
+      position: { x: e.clientX, y: e.clientY },
+      target: {
+        type,
+        entry,
+        selectedEntries: selectedItems,
+        currentPath: path,
+      },
+    });
+  };
+
+  // Global Keyboard Shortcuts (Ctrl+C, Ctrl+X, Ctrl+V, Delete, Escape)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName)) return;
+
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+      if (isCtrlOrCmd && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        handleCopy();
+      } else if (isCtrlOrCmd && e.key.toLowerCase() === "x") {
+        e.preventDefault();
+        handleCut();
+      } else if (isCtrlOrCmd && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        handlePaste();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        const activeSelected =
+          activePane === "left" ? selectedEntries : paneBSelectedEntries;
+        if (activeSelected.length > 0) {
+          e.preventDefault();
+          setDeleteConfirmPaths(activeSelected.map((i) => i.path));
+        }
+      } else if (e.key === "Escape") {
+        if (contextMenu) {
+          setContextMenu(null);
+        } else if (clipboard) {
+          setClipboard(null);
+          showNotification("Clipboard cleared");
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [activePane, selectedEntries, paneBSelectedEntries, clipboard, contextMenu, currentPath, paneBPath]);
 
   return (
     <div
@@ -897,7 +1239,7 @@ export default function FilesPage() {
 
           {/* Scan to Library */}
           <button
-            onClick={handleScanFolder}
+            onClick={() => handleScanFolder()}
             disabled={isScanning}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-textSecondary hover:text-emerald-400 border border-border text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
             title="Scan this folder directly into KV-TIDAL music library"
@@ -954,6 +1296,24 @@ export default function FilesPage() {
             >
               <LayoutList className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">List</span>
+            </button>
+            <button
+              onClick={() => {
+                setViewMode("split");
+                localStorage.setItem("kvtidal_files_view_mode", "split");
+                if (!paneBPath) {
+                  loadPaneBDirectory(currentPath);
+                }
+              }}
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                viewMode === "split"
+                  ? "bg-primary text-black font-bold shadow-sm"
+                  : "text-textSecondary hover:text-white"
+              }`}
+              title="Dual-Pane Split View (Total Commander / ForkLift style)"
+            >
+              <Columns2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Split</span>
             </button>
           </div>
           <div className="relative flex-1 sm:w-56">
@@ -1047,7 +1407,10 @@ export default function FilesPage() {
               </div>
 
               {/* Column Entries List */}
-              <div className="flex-1 overflow-y-auto p-1 space-y-0.5 scrollbar-thin">
+              <div
+                className="flex-1 overflow-y-auto p-1 space-y-0.5 scrollbar-thin"
+                onContextMenu={(e) => handleContextMenu(e, "background", undefined, "left")}
+              >
                 {col.loading ? (
                   <div className="p-8 text-center text-textSecondary text-xs flex flex-col items-center justify-center space-y-2">
                     <Loader2 className="w-5 h-5 animate-spin text-primary" />
@@ -1069,11 +1432,20 @@ export default function FilesPage() {
                     .map((item) => {
                       const isSelected = col.selectedPath === item.path;
                       const isAudio = !item.is_dir && item.format;
+                      const isCutItem =
+                        clipboard?.action === "cut" && clipboard.paths.includes(item.path);
                       return (
                         <div
                           key={item.path}
                           onClick={() => handleColumnItemClick(colIdx, item)}
+                          onContextMenu={(e) =>
+                            handleContextMenu(e, item.is_dir ? "folder" : "file", item, "left")
+                          }
                           className={`group flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer transition-all ${
+                            isCutItem
+                              ? "opacity-40 border border-dashed border-amber-400/80 bg-amber-500/5"
+                              : ""
+                          } ${
                             isSelected
                               ? "bg-primary text-black font-semibold shadow-sm"
                               : "text-textPrimary hover:bg-card hover:text-white"
@@ -1383,9 +1755,12 @@ export default function FilesPage() {
             </div>
           )}
         </div>
-      ) : (
+      ) : viewMode === "list" ? (
         /* Entries List Table */
-        <div className="bg-surface border border-border rounded-xl overflow-hidden shadow-lg">
+        <div
+          className="bg-surface border border-border rounded-xl overflow-hidden shadow-lg"
+          onContextMenu={(e) => handleContextMenu(e, "background", undefined, "left")}
+        >
         {/* Table Header */}
         <div className="p-3 border-b border-border bg-card/40 text-xs font-semibold text-textSecondary uppercase tracking-wider flex items-center justify-between">
           <div className="flex items-center space-x-3 flex-1 min-w-0">
@@ -1460,10 +1835,19 @@ export default function FilesPage() {
           <div className="divide-y divide-border">
             {filteredEntries.map((entry) => {
               const isSelected = selectedPaths.has(entry.path);
+              const isCutItem =
+                clipboard?.action === "cut" && clipboard.paths.includes(entry.path);
               return (
                 <div
                   key={entry.path}
+                  onContextMenu={(e) =>
+                    handleContextMenu(e, entry.is_dir ? "folder" : "file", entry, "left")
+                  }
                   className={`flex items-center justify-between p-3 hover:bg-card/50 transition-colors text-sm group ${
+                    isCutItem
+                      ? "opacity-40 border border-dashed border-amber-400/80 bg-amber-500/5"
+                      : ""
+                  } ${
                     isSelected ? "bg-primary/5" : ""
                   }`}
                 >
@@ -1653,6 +2037,551 @@ export default function FilesPage() {
           </div>
         )}
       </div>
+    ) : (
+      /* Dual-Pane Split View (Total Commander / ForkLift Style) */
+      <div className="space-y-4">
+        {/* Split Mode Central Action Toolbar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-surface border border-border/80 p-3 rounded-xl shadow-lg text-xs font-mono">
+          <div className="flex items-center space-x-2">
+            <span className="text-textSecondary">Active Focus:</span>
+            <button
+              onClick={() => setActivePane(activePane === "left" ? "right" : "left")}
+              className="px-2.5 py-1 rounded-lg font-bold bg-primary/15 text-primary border border-primary/40 flex items-center space-x-1.5 hover:bg-primary/25 transition-colors cursor-pointer"
+              title="Click to toggle active pane focus (or press Tab)"
+            >
+              <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+              <span>{activePane === "left" ? "Pane A (Left)" : "Pane B (Right)"}</span>
+            </button>
+          </div>
+
+          {/* Cross-Pane Transfer Actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => handleCrossPaneTransfer("copy", "toRight")}
+              disabled={selectedPaths.size === 0}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover border border-border text-sky-300 disabled:opacity-30 transition-colors cursor-pointer"
+              title="Copy selected items from Left to Right Pane (F5)"
+            >
+              <span>Copy to Right</span>
+              <ArrowRightLeft className="w-3.5 h-3.5 text-sky-400" />
+            </button>
+            <button
+              onClick={() => handleCrossPaneTransfer("cut", "toRight")}
+              disabled={selectedPaths.size === 0}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover border border-border text-amber-300 disabled:opacity-30 transition-colors cursor-pointer"
+              title="Move selected items from Left to Right Pane (F6)"
+            >
+              <span>Move to Right</span>
+              <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />
+            </button>
+
+            <div className="h-4 w-[1px] bg-border mx-1 hidden sm:block" />
+
+            <button
+              onClick={() => handleCrossPaneTransfer("copy", "toLeft")}
+              disabled={paneBSelectedPaths.size === 0}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover border border-border text-sky-300 disabled:opacity-30 transition-colors cursor-pointer"
+              title="Copy selected items from Right to Left Pane"
+            >
+              <ArrowRightLeft className="w-3.5 h-3.5 text-sky-400 rotate-180" />
+              <span>Copy to Left</span>
+            </button>
+            <button
+              onClick={() => handleCrossPaneTransfer("cut", "toLeft")}
+              disabled={paneBSelectedPaths.size === 0}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover border border-border text-amber-300 disabled:opacity-30 transition-colors cursor-pointer"
+              title="Move selected items from Right to Left Pane"
+            >
+              <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400 rotate-180" />
+              <span>Move to Left</span>
+            </button>
+
+            <div className="h-4 w-[1px] bg-border mx-1 hidden sm:block" />
+
+            <button
+              onClick={() => {
+                if (activePane === "left") {
+                  loadPaneBDirectory(currentPath);
+                } else {
+                  loadDirectory(paneBPath);
+                }
+                showNotification("Synchronized both panes to the same folder");
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-card hover:bg-cardHover text-textSecondary hover:text-white border border-border transition-colors cursor-pointer"
+              title="Sync both panes to the active folder"
+            >
+              Sync Panes
+            </button>
+          </div>
+        </div>
+
+        {/* Dual Panes Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 select-none">
+          {/* ======================= PANE A (LEFT) ======================= */}
+          <div
+            onClick={() => setActivePane("left")}
+            className={`flex flex-col bg-surface border rounded-xl overflow-hidden shadow-xl transition-all min-h-[580px] ${
+              activePane === "left"
+                ? "border-primary ring-1 ring-primary/40 shadow-primary/5"
+                : "border-border opacity-90 hover:opacity-100"
+            }`}
+            onContextMenu={(e) => handleContextMenu(e, "background", undefined, "left")}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const dataStr = e.dataTransfer.getData("application/json");
+              if (dataStr) {
+                try {
+                  const data = JSON.parse(dataStr);
+                  if (data.paths && data.paths.length > 0) {
+                    fetch("/api/fs/batch-transfer", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        action: e.altKey ? "copy" : "cut",
+                        paths: data.paths,
+                        destination_dir: currentPath,
+                        conflict_resolution: "rename",
+                      }),
+                    }).then((res) => {
+                      if (res.ok) {
+                        showNotification(`Transferred ${data.paths.length} items to Left Pane`);
+                        loadDirectory(currentPath);
+                        loadPaneBDirectory(paneBPath);
+                      }
+                    });
+                  }
+                } catch (_) {}
+              }
+            }}
+          >
+            {/* Left Pane Header */}
+            <div className="p-3 border-b border-border bg-card/60 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center space-x-2">
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary border border-primary/30">
+                  PANE A
+                </span>
+                <span className="text-xs font-bold text-textPrimary truncate max-w-[140px]" title={currentPath}>
+                  {currentPath.split("/").filter(Boolean).pop() || "Root"}
+                </span>
+                <span className="text-[10px] font-mono text-textSecondary">({filteredEntries.length})</span>
+              </div>
+
+              {/* Path Breadcrumbs for Left Pane */}
+              <div className="flex items-center space-x-1 text-[11px] font-mono overflow-x-auto max-w-[280px] scrollbar-none">
+                {parentPath && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      loadDirectory(parentPath);
+                    }}
+                    className="p-1 rounded bg-card hover:text-primary transition-colors cursor-pointer"
+                    title="Parent folder"
+                  >
+                    <ArrowLeft className="w-3 h-3" />
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    loadDirectory();
+                  }}
+                  className="px-1.5 py-0.5 rounded bg-card hover:bg-cardHover text-primary transition-colors cursor-pointer"
+                >
+                  Root
+                </button>
+                {breadcrumbs.slice(-2).map((crumb) => (
+                  <React.Fragment key={crumb.path}>
+                    <span className="text-textSecondary/40">/</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        loadDirectory(crumb.path);
+                      }}
+                      className="px-1 py-0.5 rounded hover:bg-card text-textSecondary hover:text-white truncate max-w-[90px]"
+                    >
+                      {crumb.label}
+                    </button>
+                  </React.Fragment>
+                ))}
+              </div>
+
+              {/* Reload button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  loadDirectory(currentPath);
+                }}
+                className="p-1.5 rounded hover:bg-card text-textSecondary hover:text-white transition-colors cursor-pointer"
+                title="Reload Pane A"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Left Pane Search Bar */}
+            <div className="p-2 border-b border-border/60 bg-card/20 flex items-center space-x-2">
+              <div className="relative flex-1">
+                <Search className="w-3 h-3 text-textSecondary absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Filter Left Pane..."
+                  className="w-full bg-card border border-border/80 rounded-md pl-7 pr-6 py-1 text-xs text-textPrimary placeholder:text-textSecondary/50 font-mono focus:outline-none focus:border-primary"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-textSecondary hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleSelectAll();
+                }}
+                className="p-1.5 rounded hover:bg-card text-textSecondary hover:text-primary transition-colors cursor-pointer"
+                title="Select / Deselect all in Left Pane"
+              >
+                {selectedPaths.size === filteredEntries.length && filteredEntries.length > 0 ? (
+                  <CheckSquare className="w-3.5 h-3.5 text-primary" />
+                ) : (
+                  <Square className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+
+            {/* Left Pane Items List */}
+            <div className="flex-1 overflow-y-auto max-h-[560px] divide-y divide-border/60 scrollbar-thin">
+              {loading ? (
+                <div className="p-12 text-center text-textSecondary text-xs flex flex-col items-center justify-center space-y-2">
+                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                  <span>Loading Left Pane...</span>
+                </div>
+              ) : filteredEntries.length === 0 ? (
+                <div className="p-12 text-center text-textSecondary text-xs">Directory is empty</div>
+              ) : (
+                filteredEntries.map((entry) => {
+                  const isSelected = selectedPaths.has(entry.path);
+                  const isCutItem =
+                    clipboard?.action === "cut" && clipboard.paths.includes(entry.path);
+                  return (
+                    <div
+                      key={entry.path}
+                      draggable={true}
+                      onDragStart={(e) => {
+                        const dragPaths = isSelected ? Array.from(selectedPaths) : [entry.path];
+                        e.dataTransfer.setData(
+                          "application/json",
+                          JSON.stringify({ paths: dragPaths, sourcePane: "left" })
+                        );
+                      }}
+                      onClick={() => {
+                        setActivePane("left");
+                        setSelectedPaths(new Set([entry.path]));
+                      }}
+                      onDoubleClick={() => {
+                        if (entry.is_dir) {
+                          loadDirectory(entry.path);
+                        } else if (entry.format) {
+                          handlePlayDirect(entry);
+                        }
+                      }}
+                      onContextMenu={(e) =>
+                        handleContextMenu(e, entry.is_dir ? "folder" : "file", entry, "left")
+                      }
+                      className={`flex items-center justify-between px-3 py-2 text-xs transition-colors cursor-pointer group ${
+                        isCutItem
+                          ? "opacity-40 border border-dashed border-amber-400/80 bg-amber-500/5"
+                          : ""
+                      } ${
+                        isSelected
+                          ? "bg-primary/15 text-white font-medium"
+                          : "text-textPrimary hover:bg-card/60"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5 truncate min-w-0 flex-1 pr-2">
+                        <button
+                          onClick={(e) => toggleSelectOne(entry.path, e)}
+                          className="text-textSecondary hover:text-primary transition-colors cursor-pointer flex-shrink-0"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-3.5 h-3.5 text-primary" />
+                          ) : (
+                            <Square className="w-3.5 h-3.5 opacity-40 group-hover:opacity-100" />
+                          )}
+                        </button>
+
+                        {entry.is_dir ? (
+                          <Folder className="w-4 h-4 text-sky-400 flex-shrink-0" />
+                        ) : entry.format ? (
+                          <FileAudio className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                        ) : (
+                          <File className="w-4 h-4 text-textSecondary flex-shrink-0" />
+                        )}
+
+                        <div className="truncate min-w-0 flex-1">
+                          <span className="truncate block font-mono">
+                            {entry.title || entry.name}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 flex-shrink-0 font-mono text-[11px] text-textSecondary">
+                        {entry.dr_score ? (
+                          <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                            DR{entry.dr_score}
+                          </span>
+                        ) : null}
+                        <span>{entry.is_dir ? "Dir" : formatSize(entry.size_bytes)}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* ======================= PANE B (RIGHT) ======================= */}
+          <div
+            onClick={() => setActivePane("right")}
+            className={`flex flex-col bg-surface border rounded-xl overflow-hidden shadow-xl transition-all min-h-[580px] ${
+              activePane === "right"
+                ? "border-primary ring-1 ring-primary/40 shadow-primary/5"
+                : "border-border opacity-90 hover:opacity-100"
+            }`}
+            onContextMenu={(e) => handleContextMenu(e, "background", undefined, "right")}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const dataStr = e.dataTransfer.getData("application/json");
+              if (dataStr) {
+                try {
+                  const data = JSON.parse(dataStr);
+                  if (data.paths && data.paths.length > 0) {
+                    fetch("/api/fs/batch-transfer", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        action: e.altKey ? "copy" : "cut",
+                        paths: data.paths,
+                        destination_dir: paneBPath,
+                        conflict_resolution: "rename",
+                      }),
+                    }).then((res) => {
+                      if (res.ok) {
+                        showNotification(`Transferred ${data.paths.length} items to Right Pane`);
+                        loadDirectory(currentPath);
+                        loadPaneBDirectory(paneBPath);
+                      }
+                    });
+                  }
+                } catch (_) {}
+              }
+            }}
+          >
+            {/* Right Pane Header */}
+            <div className="p-3 border-b border-border bg-card/60 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center space-x-2">
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">
+                  PANE B
+                </span>
+                <span className="text-xs font-bold text-textPrimary truncate max-w-[140px]" title={paneBPath}>
+                  {paneBPath.split("/").filter(Boolean).pop() || "Root"}
+                </span>
+                <span className="text-[10px] font-mono text-textSecondary">({paneBFilteredEntries.length})</span>
+              </div>
+
+              {/* Path Breadcrumbs for Right Pane */}
+              <div className="flex items-center space-x-1 text-[11px] font-mono overflow-x-auto max-w-[280px] scrollbar-none">
+                {paneBParentPath && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      loadPaneBDirectory(paneBParentPath);
+                    }}
+                    className="p-1 rounded bg-card hover:text-primary transition-colors cursor-pointer"
+                    title="Parent folder"
+                  >
+                    <ArrowLeft className="w-3 h-3" />
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    loadPaneBDirectory();
+                  }}
+                  className="px-1.5 py-0.5 rounded bg-card hover:bg-cardHover text-primary transition-colors cursor-pointer"
+                >
+                  Root
+                </button>
+                {paneBBreadcrumbs.slice(-2).map((crumb) => (
+                  <React.Fragment key={crumb.path}>
+                    <span className="text-textSecondary/40">/</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        loadPaneBDirectory(crumb.path);
+                      }}
+                      className="px-1 py-0.5 rounded hover:bg-card text-textSecondary hover:text-white truncate max-w-[90px]"
+                    >
+                      {crumb.label}
+                    </button>
+                  </React.Fragment>
+                ))}
+              </div>
+
+              {/* Reload button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  loadPaneBDirectory(paneBPath);
+                }}
+                className="p-1.5 rounded hover:bg-card text-textSecondary hover:text-white transition-colors cursor-pointer"
+                title="Reload Pane B"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Right Pane Search Bar */}
+            <div className="p-2 border-b border-border/60 bg-card/20 flex items-center space-x-2">
+              <div className="relative flex-1">
+                <Search className="w-3 h-3 text-textSecondary absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={paneBSearchQuery}
+                  onChange={(e) => setPaneBSearchQuery(e.target.value)}
+                  placeholder="Filter Right Pane..."
+                  className="w-full bg-card border border-border/80 rounded-md pl-7 pr-6 py-1 text-xs text-textPrimary placeholder:text-textSecondary/50 font-mono focus:outline-none focus:border-primary"
+                />
+                {paneBSearchQuery && (
+                  <button
+                    onClick={() => setPaneBSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-textSecondary hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePaneBSelectAll();
+                }}
+                className="p-1.5 rounded hover:bg-card text-textSecondary hover:text-primary transition-colors cursor-pointer"
+                title="Select / Deselect all in Right Pane"
+              >
+                {paneBSelectedPaths.size === paneBFilteredEntries.length && paneBFilteredEntries.length > 0 ? (
+                  <CheckSquare className="w-3.5 h-3.5 text-primary" />
+                ) : (
+                  <Square className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+
+            {/* Right Pane Items List */}
+            <div className="flex-1 overflow-y-auto max-h-[560px] divide-y divide-border/60 scrollbar-thin">
+              {paneBLoading ? (
+                <div className="p-12 text-center text-textSecondary text-xs flex flex-col items-center justify-center space-y-2">
+                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                  <span>Loading Right Pane...</span>
+                </div>
+              ) : paneBFilteredEntries.length === 0 ? (
+                <div className="p-12 text-center text-textSecondary text-xs">Directory is empty</div>
+              ) : (
+                paneBFilteredEntries.map((entry) => {
+                  const isSelected = paneBSelectedPaths.has(entry.path);
+                  const isCutItem =
+                    clipboard?.action === "cut" && clipboard.paths.includes(entry.path);
+                  return (
+                    <div
+                      key={entry.path}
+                      draggable={true}
+                      onDragStart={(e) => {
+                        const dragPaths = isSelected ? Array.from(paneBSelectedPaths) : [entry.path];
+                        e.dataTransfer.setData(
+                          "application/json",
+                          JSON.stringify({ paths: dragPaths, sourcePane: "right" })
+                        );
+                      }}
+                      onClick={() => {
+                        setActivePane("right");
+                        setPaneBSelectedPaths(new Set([entry.path]));
+                      }}
+                      onDoubleClick={() => {
+                        if (entry.is_dir) {
+                          loadPaneBDirectory(entry.path);
+                        } else if (entry.format) {
+                          handlePlayDirect(entry);
+                        }
+                      }}
+                      onContextMenu={(e) =>
+                        handleContextMenu(e, entry.is_dir ? "folder" : "file", entry, "right")
+                      }
+                      className={`flex items-center justify-between px-3 py-2 text-xs transition-colors cursor-pointer group ${
+                        isCutItem
+                          ? "opacity-40 border border-dashed border-amber-400/80 bg-amber-500/5"
+                          : ""
+                      } ${
+                        isSelected
+                          ? "bg-primary/15 text-white font-medium"
+                          : "text-textPrimary hover:bg-card/60"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5 truncate min-w-0 flex-1 pr-2">
+                        <button
+                          onClick={(e) => togglePaneBSelectOne(entry.path, e)}
+                          className="text-textSecondary hover:text-primary transition-colors cursor-pointer flex-shrink-0"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-3.5 h-3.5 text-primary" />
+                          ) : (
+                            <Square className="w-3.5 h-3.5 opacity-40 group-hover:opacity-100" />
+                          )}
+                        </button>
+
+                        {entry.is_dir ? (
+                          <Folder className="w-4 h-4 text-sky-400 flex-shrink-0" />
+                        ) : entry.format ? (
+                          <FileAudio className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                        ) : (
+                          <File className="w-4 h-4 text-textSecondary flex-shrink-0" />
+                        )}
+
+                        <div className="truncate min-w-0 flex-1">
+                          <span className="truncate block font-mono">
+                            {entry.title || entry.name}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 flex-shrink-0 font-mono text-[11px] text-textSecondary">
+                        {entry.dr_score ? (
+                          <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                            DR{entry.dr_score}
+                          </span>
+                        ) : null}
+                        <span>{entry.is_dir ? "Dir" : formatSize(entry.size_bytes)}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     )}
 
       {/* Floating Multi-Select Action Bar */}
@@ -1699,6 +2628,61 @@ export default function FilesPage() {
             <span>Queue</span>
           </button>
 
+          {/* Cut Selected */}
+          <button
+            onClick={() =>
+              handleCut(activePane === "left" ? selectedEntries : paneBSelectedEntries)
+            }
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-amber-300 border border-amber-500/30 text-xs font-medium cursor-pointer"
+            title="Cut selected items (Ctrl+X)"
+          >
+            <Scissors className="w-3.5 h-3.5 text-amber-400" />
+            <span>Cut</span>
+          </button>
+
+          {/* Copy Selected */}
+          <button
+            onClick={() =>
+              handleCopy(activePane === "left" ? selectedEntries : paneBSelectedEntries)
+            }
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-sky-300 border border-sky-500/30 text-xs font-medium cursor-pointer"
+            title="Copy selected items (Ctrl+C)"
+          >
+            <Copy className="w-3.5 h-3.5 text-sky-400" />
+            <span>Copy</span>
+          </button>
+
+          {viewMode === "split" && (
+            <>
+              <button
+                onClick={() =>
+                  handleCrossPaneTransfer(
+                    "copy",
+                    activePane === "left" ? "toRight" : "toLeft"
+                  )
+                }
+                className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-sky-300 border border-sky-500/30 text-xs font-medium cursor-pointer"
+                title={`Copy to ${activePane === "left" ? "Right" : "Left"} Pane`}
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5 text-sky-400" />
+                <span>To {activePane === "left" ? "Right" : "Left"}</span>
+              </button>
+              <button
+                onClick={() =>
+                  handleCrossPaneTransfer(
+                    "cut",
+                    activePane === "left" ? "toRight" : "toLeft"
+                  )
+                }
+                className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-amber-300 border border-amber-500/30 text-xs font-medium cursor-pointer"
+                title={`Move to ${activePane === "left" ? "Right" : "Left"} Pane`}
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />
+                <span>Move</span>
+              </button>
+            </>
+          )}
+
           {/* Batch Delete */}
           <button
             onClick={() => setDeleteConfirmPaths(Array.from(selectedPaths))}
@@ -1710,11 +2694,52 @@ export default function FilesPage() {
 
           {/* Deselect All */}
           <button
-            onClick={() => setSelectedPaths(new Set())}
+            onClick={() => {
+              if (activePane === "left") setSelectedPaths(new Set());
+              else setPaneBSelectedPaths(new Set());
+            }}
             className="p-1 rounded-lg hover:bg-card text-textSecondary hover:text-white"
             title="Clear selection"
           >
             <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Floating Clipboard Dock */}
+      {clipboard && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 bg-surface/95 backdrop-blur-xl border border-primary/50 px-4 py-2 rounded-2xl shadow-2xl flex items-center space-x-3 text-xs font-mono animate-in slide-in-from-bottom-3">
+          <div className="flex items-center space-x-2">
+            {clipboard.action === "cut" ? (
+              <Scissors className="w-4 h-4 text-amber-400 animate-pulse" />
+            ) : (
+              <Copy className="w-4 h-4 text-sky-400 animate-pulse" />
+            )}
+            <span>
+              <span className="font-bold text-primary capitalize">{clipboard.action}</span>:{" "}
+              <span className="text-white font-semibold">
+                {clipboard.paths.length} item{clipboard.paths.length > 1 ? "s" : ""}
+              </span>
+            </span>
+          </div>
+
+          <div className="h-4 w-[1px] bg-border" />
+
+          <button
+            onClick={() => handlePaste()}
+            className="flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-primary hover:bg-primary/90 text-black font-bold transition-all cursor-pointer shadow-md"
+            title="Paste items into currently active folder (Ctrl+V)"
+          >
+            <ClipboardPaste className="w-3.5 h-3.5" />
+            <span>Paste Here</span>
+          </button>
+
+          <button
+            onClick={() => setClipboard(null)}
+            className="p-1 rounded-lg hover:bg-card text-textSecondary hover:text-white transition-colors cursor-pointer"
+            title="Clear clipboard (Esc)"
+          >
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
@@ -2246,6 +3271,87 @@ export default function FilesPage() {
           </div>
         </div>
       )}
+
+      {/* Native Right-Click Context Menu */}
+      <FileContextMenu
+        position={contextMenu?.position || null}
+        target={contextMenu?.target || null}
+        onClose={() => setContextMenu(null)}
+        onPlay={(entry) => handlePlayDirect(entry)}
+        onPlayFolder={handlePlayFolder}
+        onQueue={(entry) => {
+          const track = getAudioTracks([entry]);
+          if (track.length > 0) {
+            addAllToQueue(track);
+            showNotification(`Added ${track[0].title} to queue`);
+          }
+        }}
+        onQueueFolder={handleQueueFolder}
+        onQueueSelected={() => {
+          const activeItems =
+            activePane === "left" ? selectedEntries : paneBSelectedEntries;
+          const tracks = getAudioTracks(activeItems);
+          if (tracks.length > 0) {
+            addAllToQueue(tracks);
+            showNotification(`Added ${tracks.length} tracks to queue`);
+          }
+        }}
+        onOpenFolder={(entry) => {
+          if (activePane === "left") {
+            loadDirectory(entry.path);
+          } else {
+            loadPaneBDirectory(entry.path);
+          }
+        }}
+        onCut={(entries) => handleCut(entries)}
+        onCopy={(entries) => handleCopy(entries)}
+        onPaste={(dest) => handlePaste(dest)}
+        canPaste={Boolean(clipboard && clipboard.paths.length > 0)}
+        clipboardCount={clipboard?.paths.length || 0}
+        clipboardAction={clipboard?.action}
+        onRename={(entry) => {
+          setRenameEntry(entry);
+          setRenameNewName(entry.name);
+        }}
+        onDelete={(entries) => {
+          setDeleteConfirmPaths(entries.map((e) => e.path));
+        }}
+        onNewFolder={() => setNewFolderOpen(true)}
+        onUpload={() => fileInputRef.current?.click()}
+        onEditTags={(entry) => openTagEditor(entry)}
+        onInspectHeaders={(entry) => setInspectEntry(entry)}
+        onDownload={(entry) => {
+          window.open(`/api/fs/download?path=${encodeURIComponent(entry.path)}`, "_blank");
+        }}
+        onScanLibrary={(path) => handleScanFolder(path)}
+        onRefresh={() => {
+          loadDirectory(currentPath);
+          if (viewMode === "split") loadPaneBDirectory(paneBPath);
+        }}
+        onSelectAll={() => {
+          if (activePane === "left") {
+            setSelectedPaths(new Set(filteredEntries.map((e) => e.path)));
+          } else {
+            setPaneBSelectedPaths(new Set(paneBFilteredEntries.map((e) => e.path)));
+          }
+        }}
+        isSplitView={viewMode === "split"}
+        onCopyToOppositePane={(entries) =>
+          handleCrossPaneTransfer(
+            "copy",
+            activePane === "left" ? "toRight" : "toLeft",
+            entries
+          )
+        }
+        onMoveToOppositePane={(entries) =>
+          handleCrossPaneTransfer(
+            "cut",
+            activePane === "left" ? "toRight" : "toLeft",
+            entries
+          )
+        }
+        oppositePaneName={activePane === "left" ? "Right Pane" : "Left Pane"}
+      />
     </div>
   );
 }

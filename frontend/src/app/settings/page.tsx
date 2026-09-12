@@ -32,6 +32,10 @@ export default function SettingsPage() {
     deviceTelemetry,
     configureOutputDevice,
     fetchOutputDevices,
+    streamQuality,
+    setStreamQuality,
+    autoUpgradeToFlac,
+    setAutoUpgradeToFlac,
   } = usePlayer();
 
   const [folders, setFolders] = useState<MappedFolder[]>([]);
@@ -499,6 +503,82 @@ export default function SettingsPage() {
                   <div className="text-[9px] text-textSecondary/80 mt-0.5">{r.desc}</div>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Audio Quality & Auto-Upgrade Strategy */}
+          <div className="bg-card/60 border border-border p-4 rounded-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-textPrimary flex items-center space-x-1.5">
+                <Zap className="w-4 h-4 text-cyan-400" />
+                <span>Audio Quality & Smart Auto-Upgrade</span>
+              </span>
+              <span className="font-mono text-[10px] text-cyan-300 font-bold uppercase">
+                {streamQuality.toUpperCase()} • {autoUpgradeToFlac ? "AUTO-HOTSWAP" : "MANUAL"}
+              </span>
+            </div>
+            <p className="text-textSecondary leading-relaxed text-[11px]">
+              Configure default stream profile and whether playing tracks automatically hot-swap mid-song when a bit-perfect FLAC download completes on the NAS.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              {/* Default Quality Preference */}
+              <div className="p-3 rounded-lg bg-surface border border-border space-y-2">
+                <div className="text-xs font-semibold text-textPrimary">Default Playback Quality</div>
+                <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
+                  <button
+                    onClick={() => setStreamQuality("flac")}
+                    className={`p-2 rounded border text-center transition-all ${
+                      streamQuality === "flac"
+                        ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-300 font-bold shadow-sm"
+                        : "bg-card border-border text-textSecondary hover:text-textPrimary"
+                    }`}
+                  >
+                    <div>FLAC Master</div>
+                    <div className="text-[9px] text-textSecondary mt-0.5">Bit-Perfect Lossless</div>
+                  </button>
+                  <button
+                    onClick={() => setStreamQuality("opus")}
+                    className={`p-2 rounded border text-center transition-all ${
+                      streamQuality === "opus"
+                        ? "bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold shadow-sm"
+                        : "bg-card border-border text-textSecondary hover:text-textPrimary"
+                    }`}
+                  >
+                    <div>OPUS 160k</div>
+                    <div className="text-[9px] text-textSecondary mt-0.5">Fast Web Stream</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Auto Upgrade Hot-Swap Toggle */}
+              <div className="p-3 rounded-lg bg-surface border border-border space-y-2">
+                <div className="text-xs font-semibold text-textPrimary">On Download Completion</div>
+                <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
+                  <button
+                    onClick={() => setAutoUpgradeToFlac(true)}
+                    className={`p-2 rounded border text-center transition-all ${
+                      autoUpgradeToFlac
+                        ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300 font-bold shadow-sm"
+                        : "bg-card border-border text-textSecondary hover:text-textPrimary"
+                    }`}
+                  >
+                    <div>⚡ Auto Hot-Swap</div>
+                    <div className="text-[9px] text-textSecondary mt-0.5">Instant mid-song switch</div>
+                  </button>
+                  <button
+                    onClick={() => setAutoUpgradeToFlac(false)}
+                    className={`p-2 rounded border text-center transition-all ${
+                      !autoUpgradeToFlac
+                        ? "bg-purple-500/20 border-purple-500/50 text-purple-300 font-bold shadow-sm"
+                        : "bg-card border-border text-textSecondary hover:text-textPrimary"
+                    }`}
+                  >
+                    <div>Prompt Button</div>
+                    <div className="text-[9px] text-textSecondary mt-0.5">Clickable toast action</div>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

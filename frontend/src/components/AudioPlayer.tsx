@@ -341,14 +341,19 @@ export function AudioPlayer() {
           <div className="flex items-center bg-card/80 border border-border/80 rounded-lg p-0.5 text-[10px] font-mono font-bold select-none">
             <button
               onClick={() => switchStreamQuality("flac")}
-              title="Switch instantly to FLAC (Bit-Perfect Lossless Master)"
-              className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+              title={downloadStatus.isDone ? "FLAC Master is downloaded & ready on NAS! Click to switch" : "Switch instantly to FLAC (Bit-Perfect Lossless Master)"}
+              className={`px-1.5 py-0.5 rounded transition-all cursor-pointer flex items-center space-x-1 ${
                 streamQuality === "flac"
                   ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 shadow-sm"
+                  : downloadStatus.isDone
+                  ? "text-emerald-400 hover:text-white border border-emerald-500/50 bg-emerald-500/10 animate-pulse"
                   : "text-textSecondary hover:text-white"
               }`}
             >
-              FLAC
+              {downloadStatus.isDone && streamQuality === "opus" && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-0.5" />
+              )}
+              <span>FLAC</span>
             </button>
             <button
               onClick={() => switchStreamQuality("opus")}
@@ -684,13 +689,18 @@ export function AudioPlayer() {
                 <div className="flex items-center bg-card border border-border rounded-lg p-0.5 text-[9px] font-mono font-bold">
                   <button
                     onClick={() => switchStreamQuality("flac")}
-                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer flex items-center space-x-1 ${
                       streamQuality === "flac"
                         ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/40"
+                        : downloadStatus.isDone
+                        ? "text-emerald-400 border border-emerald-500/50 bg-emerald-500/10 animate-pulse"
                         : "text-textSecondary"
                     }`}
                   >
-                    FLAC
+                    {downloadStatus.isDone && streamQuality === "opus" && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-0.5" />
+                    )}
+                    <span>FLAC</span>
                   </button>
                   <button
                     onClick={() => switchStreamQuality("opus")}

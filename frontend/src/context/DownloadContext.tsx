@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import { DownloadJob, DownloadStage } from "@/types";
 import { ToastItem, ToastNotificationContainer } from "@/components/ToastNotification";
+import { usePlayer } from "@/context/PlayerContext";
 
 interface DownloadTrackPayload {
   title: string;
@@ -52,6 +53,22 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const prevJobStages = useRef<Map<string, DownloadStage>>(new Map());
 
+  const {
+    currentTrack,
+    streamQuality,
+    switchStreamQuality,
+    autoUpgradeToFlac,
+  } = usePlayer();
+
+  const currentTrackRef = useRef(currentTrack);
+  currentTrackRef.current = currentTrack;
+  const streamQualityRef = useRef(streamQuality);
+  streamQualityRef.current = streamQuality;
+  const autoUpgradeRef = useRef(autoUpgradeToFlac);
+  autoUpgradeRef.current = autoUpgradeToFlac;
+  const switchStreamQualityRef = useRef(switchStreamQuality);
+  switchStreamQualityRef.current = switchStreamQuality;
+
   const addToast = useCallback((toast: Omit<ToastItem, "id">) => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((prev) => [...prev, { ...toast, id }]);
@@ -76,13 +93,51 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         const prevStage = prevJobStages.current.get(job.id);
         if (prevStage && prevStage !== job.stage) {
           if (job.stage === "completed") {
-            addToast({
-              type: "success",
-              title: job.title,
-              artist: job.artist,
-              message: "Bit-perfect FLAC saved to Synology NAS",
-              savedPath: job.saved_path,
-            });
+            const cur = currentTrackRef.current;
+            const isCurrent =
+              cur &&
+              ((cur.title.toLowerCase().trim() === job.title.toLowerCase().trim() &&
+                cur.artist.toLowerCase().trim() === job.artist.toLowerCase().trim()) ||
+               (job.track_id && cur.id === job.track_id));
+
+            const isNotLossless =
+              streamQualityRef.current === "opus" ||
+              cur?.source === "web-stream-opus" ||
+              cur?.format?.toLowerCase().includes("opus") ||
+              (cur && !cur.source?.includes("local") && cur.source !== "tidal-direct-hifi");
+
+            if (isCurrent && isNotLossless) {
+              if (autoUpgradeRef.current) {
+                switchStreamQualityRef.current("flac");
+                addToast({
+                  type: "success",
+                  title: job.title,
+                  artist: job.artist,
+                  message: "⚡ FLAC Master ready! Hot-swapped seamlessly to Bit-Perfect Master.",
+                  savedPath: job.saved_path,
+                });
+              } else {
+                addToast({
+                  type: "success",
+                  title: job.title,
+                  artist: job.artist,
+                  message: "Bit-perfect FLAC Master saved to Synology NAS",
+                  savedPath: job.saved_path,
+                  action: {
+                    label: "⚡ Switch to FLAC Master Now",
+                    onClick: () => switchStreamQualityRef.current("flac"),
+                  },
+                });
+              }
+            } else {
+              addToast({
+                type: "success",
+                title: job.title,
+                artist: job.artist,
+                message: "Bit-perfect FLAC saved to Synology NAS",
+                savedPath: job.saved_path,
+              });
+            }
           } else if (job.stage === "failed") {
             addToast({
               type: "error",

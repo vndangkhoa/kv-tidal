@@ -300,6 +300,8 @@ interface PlayerContextType {
   streamQuality: "flac" | "opus";
   setStreamQuality: (quality: "flac" | "opus") => void;
   switchStreamQuality: (newQuality: "flac" | "opus") => Promise<void>;
+  autoUpgradeToFlac: boolean;
+  setAutoUpgradeToFlac: (enabled: boolean) => void;
 }
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
@@ -327,6 +329,25 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setStreamQualityState(q);
     try {
       localStorage.setItem("kv_stream_quality", q);
+    } catch (_) {}
+  }, []);
+
+  // Auto-upgrade to FLAC Master when background download completes for current track
+  const [autoUpgradeToFlac, setAutoUpgradeToFlacState] = useState<boolean>(true);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("kv_auto_upgrade_flac");
+      if (saved !== null) {
+        setAutoUpgradeToFlacState(saved === "true");
+      }
+    } catch (_) {}
+  }, []);
+
+  const setAutoUpgradeToFlac = useCallback((enabled: boolean) => {
+    setAutoUpgradeToFlacState(enabled);
+    try {
+      localStorage.setItem("kv_auto_upgrade_flac", enabled ? "true" : "false");
     } catch (_) {}
   }, []);
 
@@ -1588,6 +1609,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         streamQuality,
         setStreamQuality,
         switchStreamQuality,
+        autoUpgradeToFlac,
+        setAutoUpgradeToFlac,
       }}
     >
       {children}

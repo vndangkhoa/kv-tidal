@@ -11,6 +11,10 @@ export interface ToastItem {
   artist?: string;
   message: string;
   savedPath?: string;
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
 }
 
 interface ToastNotificationProps {
@@ -61,6 +65,21 @@ export function ToastNotificationContainer({
             >
               {toast.message}
             </div>
+
+            {toast.action && (
+              <div className="mt-2 pt-1.5 border-t border-border/50 flex items-center">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toast.action?.onClick();
+                    onDismiss(toast.id);
+                  }}
+                  className="px-2.5 py-1 rounded bg-primary hover:bg-primary/80 text-black font-semibold text-[11px] transition-all cursor-pointer shadow flex items-center space-x-1"
+                >
+                  <span>{toast.action.label}</span>
+                </button>
+              </div>
+            )}
 
             {toast.savedPath && (
               <div className="mt-2 pt-1.5 border-t border-border/50 flex items-center justify-between">

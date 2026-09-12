@@ -4,6 +4,14 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-18] - 2026-09-12
+
+### Added
+- **Smart Auto-Upgrade to Bit-Perfect FLAC on Download Complete**: If a user is listening to an OPUS web stream and a Soulseek/Tidal FLAC download finishes in the background, KV-Tidal automatically hot-swaps mid-song to the bit-perfect FLAC master at the exact millisecond without interrupting playback.
+- **Interactive Toast Notification Action**: Toasts now support direct call-to-action buttons (`[ ⚡ Switch to FLAC Master Now ]`), giving users immediate one-tap control when a download completes.
+- **Pulsating Ready Indicators**: Added glowing emerald pulse badges and status dots to the `[ FLAC | OPUS ]` quality switcher when a FLAC file is downloaded and ready on the NAS for the active song.
+- **Audio Quality & Auto-Upgrade Strategy Settings**: Added a new settings card in Settings (`/settings`) allowing users to choose their default playback format (FLAC vs OPUS) and toggle between Auto Hot-Swap and Manual Prompt Button on download completion.
+
 ## [1.0.0-17] - 2026-09-12
 
 ### Added
