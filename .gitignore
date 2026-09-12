@@ -21,6 +21,7 @@ backend/target/
 # Package staging
 build_spk/
 *.spk
+spk/bin/
 
 # Runtime / Application Data & Logs
 data/

@@ -243,16 +243,26 @@ async fn fetch_audio_flac_ytdlp(
             .unwrap_or_else(|| std::path::PathBuf::from("yt-dlp")),
     };
 
-    let mut child = tokio::process::Command::new(&yt_binary)
-        .args([
-            &query,
-            "-f", "ba/b",
-            "-x",
-            "--audio-format", "flac",
-            "--max-filesize", "150M",
-            "--newline",
-            "-o", &template,
-        ])
+    let mut cmd = tokio::process::Command::new(&yt_binary);
+    cmd.args([
+        &query,
+        "-f", "ba/b",
+        "-x",
+        "--audio-format", "flac",
+        "--max-filesize", "150M",
+        "--newline",
+        "-o", &template,
+    ]);
+
+    let base_tmp = std::env::var("TMPDIR").ok().and_then(|t| {
+        if t != "/tmp" { Some(std::path::PathBuf::from(t)) } else { None }
+    }).unwrap_or_else(|| {
+        std::env::var("DATA_DIR").map(|d| std::path::PathBuf::from(d).join("tmp")).unwrap_or_else(|_| std::path::PathBuf::from("./data/tmp"))
+    });
+    let _ = std::fs::create_dir_all(&base_tmp);
+    cmd.env("TMPDIR", &base_tmp);
+
+    let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()

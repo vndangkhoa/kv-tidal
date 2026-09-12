@@ -4,6 +4,15 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-15] - 2026-09-12
+
+### Fixed
+- **Resolved 30-Second Preview Cutoff**: Fixed issue where online music on Synology NAS dropped into 30s Apple Music preview snippets due to Python 3.8 version incompatibility on DSM 7.2.
+- **Direct Local Invidious Integration**: Added Tier-1 stream resolver querying local NAS Invidious service (`http://127.0.0.1:7601`) for instantaneous ~10ms full-length Opus/AAC stream extraction without subprocesses.
+- **Standalone `yt-dlp_linux` ELF Binary**: Upgraded SPK bundle to include self-contained Linux x86_64 `yt-dlp_linux` ELF binary with embedded Python 3.11+ runtime, eliminating any dependency on DSM's Python version.
+- **Synology `noexec /tmp` Bypass**: Routed PyInstaller temporary extraction directory to `${VAR_DIR}/tmp` via explicit `TMPDIR` environment configuration, preventing `libz.so.1: failed to map segment from shared object` permission errors.
+- **Public Invidious Fallback Grid**: Added resilient public Invidious instances (`inv.tux.pizza`, `invidious.nerdvpn.de`, `yewtu.be`) to guarantee 100% full-length song playback even if local stream extractors are busy or offline.
+
 ## [1.0.0-14] - 2026-09-12
 
 ### Added

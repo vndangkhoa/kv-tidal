@@ -50,17 +50,16 @@ else
     cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
 fi
 
-# Bundle standalone yt-dlp into package/bin
-if [ -x "/home/khoavo/.local/bin/yt-dlp" ]; then
-    echo "Bundling host yt-dlp into SPK package..."
-    cp "/home/khoavo/.local/bin/yt-dlp" "$STAGE_DIR/package/bin/yt-dlp"
-elif command -v yt-dlp >/dev/null 2>&1; then
-    echo "Bundling system yt-dlp into SPK package..."
-    cp "$(command -v yt-dlp)" "$STAGE_DIR/package/bin/yt-dlp"
-else
-    echo "Downloading standalone Linux x86_64 yt-dlp for SPK package..."
-    curl -sL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o "$STAGE_DIR/package/bin/yt-dlp"
+# Bundle standalone self-contained ELF yt-dlp (with embedded Python 3.11+ runtime) into package/bin
+YT_DLP_STANDALONE="$ROOT_DIR/spk/bin/yt-dlp_linux"
+if [ ! -f "$YT_DLP_STANDALONE" ] || [ $(stat -c%s "$YT_DLP_STANDALONE" 2>/dev/null || echo 0) -lt 30000000 ]; then
+    mkdir -p "$ROOT_DIR/spk/bin"
+    echo "Downloading standalone Linux x86_64 yt-dlp_linux (self-contained Python runtime)..."
+    curl -sL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" -o "$YT_DLP_STANDALONE"
+    chmod +x "$YT_DLP_STANDALONE"
 fi
+echo "Bundling standalone self-contained yt-dlp_linux into SPK package..."
+cp "$YT_DLP_STANDALONE" "$STAGE_DIR/package/bin/yt-dlp"
 
 chmod +x "$STAGE_DIR/package/bin/"*
 

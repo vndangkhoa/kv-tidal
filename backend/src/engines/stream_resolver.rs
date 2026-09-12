@@ -102,7 +102,7 @@ pub async fn bootstrap_yt_dlp() -> Option<PathBuf> {
         .build()
         .unwrap_or_default();
 
-    let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+    let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
     match client.get(download_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             if let Ok(bytes) = resp.bytes().await {
@@ -135,10 +135,48 @@ pub async fn bootstrap_yt_dlp() -> Option<PathBuf> {
     None
 }
 
+async fn resolve_via_invidious(client: &reqwest::Client, base_url: &str, artist: &str, title: &str) -> Option<String> {
+    let query = format!("{} {}", artist, title);
+    let search_url = format!("{}/api/v1/search?q={}&type=video", base_url.trim_end_matches('/'), urlencoding::encode(&query));
+    let resp = client.get(&search_url).timeout(std::time::Duration::from_secs(4)).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let items: serde_json::Value = resp.json().await.ok()?;
+    let video_id = items.as_array()?.first()?.get("videoId")?.as_str()?;
+
+    let video_url = format!("{}/api/v1/videos/{}", base_url.trim_end_matches('/'), video_id);
+    let v_resp = client.get(&video_url).timeout(std::time::Duration::from_secs(4)).send().await.ok()?;
+    if !v_resp.status().is_success() {
+        return None;
+    }
+    let v_json: serde_json::Value = v_resp.json().await.ok()?;
+    let formats = v_json.get("adaptiveFormats")?.as_array()?;
+
+    // Pick highest audio bitrate
+    let mut audio_formats: Vec<_> = formats.iter().filter(|f| {
+        f.get("type").and_then(|t| t.as_str()).map(|t| t.starts_with("audio")).unwrap_or(false)
+    }).collect();
+
+    audio_formats.sort_by_key(|f| {
+        f.get("bitrate").and_then(|b| b.as_u64()).or_else(|| {
+            f.get("bitrate").and_then(|b| b.as_str()).and_then(|s| s.parse().ok())
+        }).unwrap_or(0)
+    });
+
+    if let Some(best) = audio_formats.last() {
+        if let Some(url) = best.get("url").and_then(|u| u.as_str()) {
+            return Some(url.to_string());
+        }
+    }
+    None
+}
+
 #[derive(Clone)]
 pub struct StreamResolver {
     cache: Arc<RwLock<HashMap<String, (String, std::time::Instant)>>>,
     in_flight: Arc<RwLock<HashMap<String, broadcast::Sender<Option<String>>>>>,
+    http_client: reqwest::Client,
 }
 
 impl Default for StreamResolver {
@@ -149,9 +187,14 @@ impl Default for StreamResolver {
 
 impl StreamResolver {
     pub fn new() -> Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             in_flight: Arc::new(RwLock::new(HashMap::new())),
+            http_client,
         }
     }
 
@@ -199,62 +242,83 @@ impl StreamResolver {
     async fn resolve_as_leader(&self, key: String, artist: &str, title: &str) -> Option<String> {
         info!("Resolving full-length audio stream (singleflight leader): {}", key);
 
-        let yt_binary = match find_yt_dlp() {
-            Some(p) => p,
-            None => {
-                info!("yt-dlp not found on system, attempting auto-bootstrap...");
-                match bootstrap_yt_dlp().await {
-                    Some(p) => p,
-                    None => {
-                        warn!("yt-dlp is unavailable on this host and auto-bootstrap failed");
-                        let mut in_flight = self.in_flight.write().await;
-                        if let Some(tx) = in_flight.remove(&key) {
-                            let _ = tx.send(None);
-                        }
-                        return None;
-                    }
+        // Tier 1: Check local NAS Invidious instance (port 7601) for instant ~10ms HTTP resolution
+        for base in &["http://127.0.0.1:7601", "http://localhost:7601"] {
+            if let Some(url) = resolve_via_invidious(&self.http_client, base, artist, title).await {
+                let mut c = self.cache.write().await;
+                c.insert(key.clone(), (url.clone(), std::time::Instant::now()));
+                info!("Full-length audio stream resolved via local Invidious ({}) for {}", base, key);
+                let mut in_flight = self.in_flight.write().await;
+                if let Some(tx) = in_flight.remove(&key) {
+                    let _ = tx.send(Some(url.clone()));
                 }
-            }
-        };
-
-        let query = format!("ytsearch1:{} {}", artist, title);
-        let resolved_url = match tokio::process::Command::new(&yt_binary)
-            .args([&query, "--get-url", "-f", "ba/b", "--no-warnings"])
-            .output()
-            .await
-        {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if let Some(url) = stdout.lines().find(|l| l.starts_with("http")) {
-                    let full_url = url.trim().to_string();
-                    let mut c = self.cache.write().await;
-                    c.insert(key.clone(), (full_url.clone(), std::time::Instant::now()));
-                    info!("Full-length audio stream resolved successfully with {:?}: {}", yt_binary, key);
-                    Some(full_url)
-                } else {
-                    warn!("yt-dlp succeeded but returned no stream URL for {}", key);
-                    None
-                }
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                warn!("yt-dlp ({:?}) failed for {}: {}", yt_binary, key, stderr);
-                None
-            }
-            Err(e) => {
-                warn!("Stream extractor ({:?}) execution error for {}: {}", yt_binary, key, e);
-                None
-            }
-        };
-
-        // Broadcast to all waiting followers and remove from in_flight
-        {
-            let mut in_flight = self.in_flight.write().await;
-            if let Some(tx) = in_flight.remove(&key) {
-                let _ = tx.send(resolved_url.clone());
+                return Some(url);
             }
         }
 
-        resolved_url
+        // Tier 2: Standalone yt-dlp binary (with custom TMPDIR)
+        let yt_binary = match find_yt_dlp() {
+            Some(p) => Some(p),
+            None => bootstrap_yt_dlp().await,
+        };
+
+        if let Some(yt_binary) = yt_binary {
+            let query = format!("ytsearch1:{} {}", artist, title);
+            let mut cmd = tokio::process::Command::new(&yt_binary);
+            cmd.args([&query, "--get-url", "-f", "ba/b", "--no-warnings"]);
+
+            let base_tmp = std::env::var("TMPDIR").ok().and_then(|t| {
+                if t != "/tmp" { Some(PathBuf::from(t)) } else { None }
+            }).unwrap_or_else(|| {
+                std::env::var("DATA_DIR").map(|d| PathBuf::from(d).join("tmp")).unwrap_or_else(|_| PathBuf::from("./data/tmp"))
+            });
+            let _ = std::fs::create_dir_all(&base_tmp);
+            cmd.env("TMPDIR", &base_tmp);
+
+            match cmd.output().await {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if let Some(url) = stdout.lines().find(|l| l.starts_with("http")) {
+                        let full_url = url.trim().to_string();
+                        let mut c = self.cache.write().await;
+                        c.insert(key.clone(), (full_url.clone(), std::time::Instant::now()));
+                        info!("Full-length audio stream resolved successfully with {:?}: {}", yt_binary, key);
+                        let mut in_flight = self.in_flight.write().await;
+                        if let Some(tx) = in_flight.remove(&key) {
+                            let _ = tx.send(Some(full_url.clone()));
+                        }
+                        return Some(full_url);
+                    }
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("yt-dlp ({:?}) failed for {}: {}", yt_binary, key, stderr);
+                }
+                Err(e) => {
+                    warn!("Stream extractor ({:?}) execution error for {}: {}", yt_binary, key, e);
+                }
+            }
+        }
+
+        // Tier 3: Public Invidious instances as high-reliability fallback
+        for base in &["https://inv.tux.pizza", "https://invidious.nerdvpn.de", "https://yewtu.be"] {
+            if let Some(url) = resolve_via_invidious(&self.http_client, base, artist, title).await {
+                let mut c = self.cache.write().await;
+                c.insert(key.clone(), (url.clone(), std::time::Instant::now()));
+                info!("Full-length audio stream resolved via fallback Invidious ({}) for {}", base, key);
+                let mut in_flight = self.in_flight.write().await;
+                if let Some(tx) = in_flight.remove(&key) {
+                    let _ = tx.send(Some(url.clone()));
+                }
+                return Some(url);
+            }
+        }
+
+        warn!("All full-length stream resolvers failed for {}", key);
+        let mut in_flight = self.in_flight.write().await;
+        if let Some(tx) = in_flight.remove(&key) {
+            let _ = tx.send(None);
+        }
+        None
     }
 }

@@ -4,7 +4,8 @@ INSTALL_DIR="/var/packages/${PACKAGE}/target"
 ETC_DIR="/var/packages/${PACKAGE}/etc"
 VAR_DIR="/var/packages/${PACKAGE}/var"
 
-mkdir -p "$ETC_DIR" "$VAR_DIR"
+mkdir -p "$ETC_DIR" "$VAR_DIR" "$VAR_DIR/tmp"
+chmod 777 "$VAR_DIR/tmp" 2>/dev/null || true
 
 # Auto-detect real music shared folder if left empty or default
 DETECTED_MUSIC=""

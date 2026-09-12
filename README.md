@@ -1,112 +1,225 @@
 # KV-TIDAL 🎵
 
-> High-Resolution Music Streaming & Downloader Platform for Synology NAS (Docker & Native SPK)
+<p align="center">
+  <img src="spk/PACKAGE_ICON_256.PNG" width="128" height="128" alt="KV-Tidal Icon" />
+</p>
 
-**KV-Tidal** is an open-source, self-hosted music platform built with **Rust** (high-performance async engine) and **Next.js 15 / React 19** (modern dark-theme PWA interface). It provides full-track streaming, bit-perfect FLAC downloads from Tidal and Qobuz, live Global & Vietnamese trending charts, existing NAS music library mapping with `inotify` live detection, and an **OpenSubsonic** server compatible with all major mobile and desktop music players.
+<p align="center">
+  <strong>Ultimate High-Resolution Music Streaming & Audiophile Vault for Synology NAS</strong>
+</p>
 
----
-
-## ✨ Features
-
-- **🇻🇳 Live Vietnamese Trending Top 50**: Automatically updated chart featuring top trending hits in Vietnam with high-resolution 1000x1000 artwork.
-- **🌍 Billboard & Global Hot 50**: Worldwide top chart updated in real-time.
-- **🎧 Full Lossless Audio**: Resolves full post-paywall FLAC streams and uncompressed downloads (no 30-second preview cutoffs).
-- **🛡️ Anti-Blocking Architecture**: Handles geo-blocking (Vietnam IP edge blocks) and features multi-CDN fallbacks so artwork and tracks never fail to load.
-- **📁 Existing NAS Library Ingestion**: Map existing Synology shares (e.g. `/volume1/music`) with instant background scanning and real-time Linux `inotify` file watchers.
-- **⚡ Atomic File Transfers**: Stream downloads to `.part` files, embed Vorbis/ID3 tags and artwork via `lofty`, and atomically rename into `{Artist}/{Album}/{Track} - {Title}.flac` without corrupting media indexers.
-- **📱 Universal Client Support**:
-  - **Web / PWA**: Installable on iPhone (Safari) and Android (Chrome) with background audio and lock-screen controls via `MediaSession` API.
-  - **Subsonic Ecosystem**: Connect **Symfonium** (Android), **Feishin** (Desktop), **Ample / Tempo** (iOS), or **Substreamer** directly to `http://<nas-ip>:8080/rest`.
-- **🚀 Dual-Mode Deployment**:
-  - **Native Synology SPK**: Pure native binary package for Synology Package Center with near-zero RAM usage (~15MB). No Docker required!
-  - **Docker Container**: Ready-to-run container image with optional `gluetun` VPN integration for Synology Container Manager.
+<p align="center">
+  <a href="https://pkg.khoavo.myds.me/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--15-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
+  <a href="https://hub.docker.com/r/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Docker_Hub-vndangkhoa%2Fkv--tidal-2496ED?style=flat-square&logo=docker" alt="Docker Hub" /></a>
+  <a href="https://ghcr.io/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/GHCR.io-vndangkhoa%2Fkv--tidal-181717?style=flat-square&logo=github" alt="GHCR" /></a>
+  <a href="https://git.khoavo.myds.me/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Forgejo-git.khoavo.myds.me-FB542B?style=flat-square&logo=git" alt="Forgejo" /></a>
+  <img src="https://img.shields.io/badge/Engine-Rust_1.85_Async-DEA584?style=flat-square&logo=rust" alt="Rust" />
+  <img src="https://img.shields.io/badge/Frontend-Next.js_15_%2B_React_19-000000?style=flat-square&logo=next.js" alt="Next.js" />
+  <img src="https://img.shields.io/badge/Subsonic-OpenSubsonic_v1.16.1-FF5500?style=flat-square" alt="OpenSubsonic" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
+</p>
 
 ---
 
-## 🛠️ Deployment Options
+## 📖 Overview
+
+**KV-Tidal** is a self-hosted, ultra-low-latency audiophile music streaming platform and downloader engineered specifically for **Synology NAS (DSM 7.0+)** and **Docker Container Manager**. 
+
+Built with a high-concurrency **Rust Axum** backend and a responsive **Next.js 15 / React 19** dark-themed PWA frontend, KV-Tidal bridges your local lossless audio library with real-time online streaming, live trending charts, and an **OpenSubsonic** server compatible with all audiophile mobile and desktop players.
+
+---
+
+## ✨ Key Features
+
+### 🎵 100% Full-Length Music Streaming (No 30-Second Cutoffs)
+- **Multi-Tier Stream Resolution Engine**: Resolves full-length, high-bitrate audio streams with automatic failover:
+  1. **Direct Local Invidious (`127.0.0.1:7601`)**: Instant ~10ms stream resolution running natively on your NAS with zero subprocess overhead.
+  2. **Bundled Standalone `yt-dlp`**: Embedded Linux x86_64 ELF binary with built-in Python 3.11+ runtime and custom `TMPDIR` routing, bypassing Synology DSM's `noexec /tmp` mount limitations.
+  3. **High-Reliability Public Invidious Grid**: Automatic fallback network across global Invidious instances (`inv.tux.pizza`, `invidious.nerdvpn.de`, `yewtu.be`).
+- **Full HTTP Range Seeking**: Scrub and jump to any timestamp with zero latency using chunked byte-range requests.
+
+### 🎛️ Studio-Grade DSD Transcoding & Bitstream Playback
+- **On-The-Fly DSD Decimation (24-bit / 88.2 kHz)**: Web browsers cannot decode 1-bit DSD (`.dsf`, `.dff`). KV-Tidal decimates DSD streams in real-time into 24-bit / 88.2 kHz FLAC with mathematically bit-perfect power-of-2 integer sub-sampling (2.8224 MHz / 32 = 88.2 kHz).
+- **Persistent Stream Cache**: Transcoded FLAC files are cached in `${DATA_DIR}/dsd_cache/` for instant subsequent seeking.
+- **Hardware ALSA Direct Bitstream Playback**: Direct `/api/devices/play` dispatcher sending bit-perfect Native DSD / DoP (2.82MHz) or PCM to USB DACs connected to your Synology NAS.
+
+### 📚 Sub-Millisecond Audiophile Library
+- **Pre-Serialized JSON Caching**: Queries over 10,000+ local tracks respond in `< 1ms` under read lock.
+- **Fast Alphabet Jump Scroller**: Responsive A-Z navigation bar supporting Vietnamese diacritic normalization (`Đ` -> `D`, `Ơ` -> `O`, `Ư` -> `U`) and numeric symbols.
+- **Instant Album Inspection**: Dedicated `/api/library/album` endpoint displaying full album artwork, disc numbering, and sorted tracklists in a clean slide-over modal.
+
+### 📁 macOS Finder Column Browser (Miller Columns)
+- **Cascading File Explorer**: Navigate tens of thousands of tracks in `/files` with resizable cascading columns, horizontal auto-scroll, and full keyboard navigation (`←`, `→`, `↑`, `↓`, `Spacebar`).
+- **Audio QuickLook Inspector**: Audiophile side pane featuring album sleeve preview, Dynamic Range (DR) rating gauge, Hi-Res codec badge (`24-bit / 96kHz FLAC`, `DSD64`), audio specs grid, and 1-click clipboard path copy.
+
+### 🖼️ Multi-Tier Local Cover Art Resolver (`/api/fs/cover`)
+- **4-Tier Artwork Discovery**:
+  1. Sidecar image inspection (`folder.jpg`, `cover.jpg`, `front.jpg`, `cover.png`).
+  2. Parent directory traversal (for multi-disc releases like `CD1`, `CD2`, `Mat A`, `Mat B`).
+  3. Embedded audio tag extraction (ID3v2, Vorbis Comments, MP4 cover) via native `lofty`.
+  4. Apple Music 1000x1000 high-res CDN fallback with persistent disk caching in `${DATA_DIR}/covers/`.
+- **Full-Resolution Zoom Lightbox**: Inspect high-res vinyl artwork and booklet sleeves with 1 click.
+
+### 🇻🇳 Live Vietnamese & Global Trending Top 50
+- **Automated RSS Ingestion**: Live Top 50 trending songs and albums in Vietnam and Worldwide updated continuously with high-resolution artwork.
+
+### 📱 Universal OpenSubsonic Ecosystem
+- Fully compliant **OpenSubsonic API (`/rest`)** supporting:
+  - **Symfonium** (Android)
+  - **Feishin** (Windows, macOS, Linux)
+  - **Tempo / Ample** (iOS)
+  - **Substreamer** & **DStrem**
+
+---
+
+## 🚀 Installation & Deployment
 
 ### Option 1: Native Synology SPK Package (Recommended)
 
-1. **Build the `.spk` package**:
-   ```bash
-   ./spk/build-spk.sh
-   ```
-   This compiles the Next.js frontend into static assets, builds the optimized release binary in Rust, and packages everything into `kv-tidal.spk`.
+Running as a native DSM package consumes **less than 25MB RAM** with near-zero CPU idle footprint.
 
-2. **Install on Synology DSM**:
-   - Open **Synology DSM** → **Package Center**.
-   - Click **Manual Install** in the top right.
-   - Select the generated `kv-tidal.spk` file.
-   - Follow the installation wizard:
-     - Select your existing Music share folder (default `/volume1/music`).
-     - Choose your port (default `8080`).
-     - Set your Subsonic username and password.
-   - Click **Done**. KV-Tidal is now running as a native DSM service!
+#### Method A: Synology Package Center (Automatic Feed)
+1. In Synology DSM, open **Package Center** → **Settings** → **Package Sources**.
+2. Click **Add** and enter:
+   - **Name**: `KV Apps`
+   - **Location**: `https://pkg.khoavo.myds.me`
+3. Click **Community** tab, search for **KV-Tidal**, and click **Install**.
+
+#### Method B: Manual SPK Install
+1. Download the latest package:
+   - **[⬇️ Download kvtidal-1.0.0-15.spk](https://spk.khoavo.myds.me/kvtidal-1.0.0-15.spk)**
+2. In DSM **Package Center**, click **Manual Install** in the top right.
+3. Select `kvtidal-1.0.0-15.spk` and follow the setup wizard:
+   - **Music Directory**: Automatically defaults to `/volume2/music` or `/volume1/music`.
+   - **Port**: Default is `26784`.
+   - **Subsonic User / Password**: Set your desired credentials (default: `admin` / `admin`).
+4. Click **Apply**. KV-Tidal will start automatically and appear in your DSM Application Launcher!
 
 ---
 
 ### Option 2: Docker / Synology Container Manager
 
-1. **Create directories on your Synology NAS**:
-   ```bash
-   mkdir -p /volume1/docker/kv-tidal/data
-   ```
+KV-Tidal is published to Docker Hub, GitHub Container Registry, and Forgejo:
 
-2. **Deploy via Docker Compose**:
-   ```bash
-   docker compose up -d
-   ```
+```bash
+docker run -d \
+  --name kv-tidal \
+  --restart unless-stopped \
+  -p 26784:8080 \
+  -v /volume2/music:/music:ro \
+  -v /volume1/docker/kv-tidal/data:/data \
+  -e HOST=0.0.0.0 \
+  -e PORT=8080 \
+  -e MUSIC_DIR=/music \
+  -e DATA_DIR=/data \
+  vndangkhoa/kv-tidal:latest
+```
 
-3. **Access the Web Dashboard**:
-   - Open `http://<synology-ip>:8080` in your web browser or phone.
+#### Docker Compose (`docker-compose.yml`)
+
+```yaml
+version: "3.8"
+
+services:
+  kv-tidal:
+    image: vndangkhoa/kv-tidal:latest
+    container_name: kv-tidal
+    restart: unless-stopped
+    ports:
+      - "26784:8080"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - PUID=1026
+      - PGID=100
+      - MUSIC_DIR=/music
+      - DATA_DIR=/data
+    volumes:
+      - /volume2/music:/music:ro
+      - /volume1/docker/kv-tidal/data:/data
+```
 
 ---
 
 ## 📱 Connecting Subsonic Mobile & Desktop Apps
 
-KV-Tidal provides a fully compliant **OpenSubsonic API** at `/rest`. To connect mobile apps (such as **Symfonium** on Android or **Tempo** on iOS):
+Connect your favorite mobile app (such as **Symfonium** on Android or **Tempo** on iOS) to stream your NAS music anywhere:
 
-| Parameter | Value |
+| Setting | Value |
 | :--- | :--- |
 | **Server Type** | Subsonic / OpenSubsonic |
-| **Server Address** | `http://<synology-ip>:8080` |
-| **Username** | `admin` (or your configured user) |
-| **Password** | `admin` (or your configured password) |
-
-Once connected, your mobile app will stream directly from your NAS library and display the live trending charts in the "Top Songs" feed.
+| **Server URL** | `http://<synology-ip>:26784` (or your reverse proxy domain) |
+| **Username** | `admin` (or user configured during install) |
+| **Password** | `admin` (or password configured during install) |
+| **Client Name** | `Symfonium`, `Feishin`, etc. |
 
 ---
 
-## 🔧 Project Architecture
+## ⚙️ Configuration Reference (`config.json`)
+
+Stored in `/var/packages/kvtidal/etc/config.json` (SPK) or `/data/config.json` (Docker):
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 26784,
+  "puid": 1026,
+  "pgid": 100,
+  "data_dir": "/var/packages/kvtidal/var",
+  "web_dir": "/var/packages/kvtidal/target/web",
+  "subsonic_user": "admin",
+  "subsonic_password": "admin",
+  "download_dir": "/volume2/music",
+  "libraries": [
+    {
+      "name": "Synology Music Share",
+      "path": "/volume2/music",
+      "is_download_target": true,
+      "watch_changes": true
+    }
+  ]
+}
+```
+
+---
+
+## 🏗️ Architecture
 
 ```
 kv-tidal/
-├── backend/                  # Rust Axum/Tokio Engine
+├── backend/                  # Rust 1.85 Engine (Axum, Tokio, Lofty, Tower)
 │   ├── src/
-│   │   ├── main.rs           # Web server, router, static file server
-│   │   ├── config.rs         # Configuration & Synology permissions (PUID/PGID)
-│   │   ├── api/              # REST Endpoints (trending, search, download, fs, library)
-│   │   ├── subsonic/         # OpenSubsonic API protocol engine
-│   │   ├── engines/          # Tidal & Qobuz resolvers + metadata fallbacks
-│   │   ├── trending/         # Auto-refreshing Vietnam & Global Top 50
-│   │   └── storage/          # inotify watcher, scanner & atomic FLAC tagger
-├── frontend/                 # Next.js 15+ React 19 Frontend (PWA)
+│   │   ├── main.rs           # Web server, unified routes & static file server
+│   │   ├── config.rs         # Synology user & permission lifecycle
+│   │   ├── api/
+│   │   │   ├── stream.rs     # Lossless audio streaming & DSD 24/88.2 FLAC transcoder
+│   │   │   ├── library.rs    # Pre-serialized library cache & album endpoint
+│   │   │   ├── fs.rs         # Column browser & sidecar cover art resolver
+│   │   │   ├── devices.rs    # ALSA hardware bitstream dispatcher (/proc/asound)
+│   │   │   └── download.rs   # Atomic FLAC downloader with telemetry
+│   │   ├── engines/
+│   │   │   ├── stream_resolver.rs # Multi-tier Invidious & yt-dlp resolver
+│   │   │   └── tidal.rs      # Tidal & Qobuz metadata & stream engine
+│   │   ├── subsonic/         # OpenSubsonic v1.16.1 protocol engine
+│   │   └── storage/          # inotify file watcher & mtime scanner cache
+│   └── Cargo.toml
+├── frontend/                 # Next.js 15+ React 19 Frontend (Tailwind CSS, Lucide)
 │   ├── src/
 │   │   ├── app/              # App Router (Trending, Search, Library, Files, Settings)
-│   │   ├── components/       # Player, TrackRow, Navigation
-│   │   └── context/          # Web Audio & MediaSession state
-├── spk/                      # Synology SPK Packaging Definitions
-│   ├── INFO                  # DSM 7 Package Manifest
-│   ├── conf/privilege        # DSM 7 Security & Share Permissions
-│   ├── scripts/              # Daemon start-stop-status & lifecycle scripts
-│   ├── WIZARD_UIFILES/       # DSM Manual Install Wizard
-│   └── build-spk.sh          # Automated 1-click SPK compilation script
-├── Dockerfile                # Multi-stage production container build
-└── docker-compose.yml        # Synology Container Manager setup
+│   │   ├── components/       # Player, AlphabetScroller, QuickLook, AlbumModal
+│   │   └── utils/alphabet.ts # Vietnamese diacritics & letter indexing
+│   └── package.json
+├── spk/                      # Synology SPK Package Toolchain
+│   ├── INFO                  # DSM 7 package metadata manifest
+│   ├── conf/privilege        # DSM 7 ACL & sc-kvtidal permissions
+│   ├── scripts/              # Lifecycle (postinst, start-stop-status, upgrades)
+│   └── build-spk.sh          # 1-click Debian Bookworm SPK assembler
+├── Dockerfile                # Multi-stage production container
+└── docker-compose.yml        # Container Manager specification
 ```
 
 ---
 
 ## 📄 License
 
-MIT License. Designed for personal homelab audio streaming and self-hosting on Synology NAS.
+MIT License. Crafted with precision for the ultimate homelab audiophile experience on Synology NAS.

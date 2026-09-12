@@ -10,11 +10,13 @@ start_daemon() {
     if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
         return 0
     fi
-    mkdir -p "$VAR_DIR"
+    mkdir -p "$VAR_DIR" "$VAR_DIR/tmp"
     export DATA_DIR="${VAR_DIR}"
     export CONFIG_PATH="/var/packages/${PACKAGE}/etc/config.json"
     export WEB_DIR="${INSTALL_DIR}/web"
     export RUST_LOG="info"
+    export TMPDIR="${VAR_DIR}/tmp"
+    export PATH="${INSTALL_DIR}/bin:/usr/local/bin:/usr/syno/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/packages/ffmpeg7/target/bin:/var/packages/ffmpeg6/target/bin:/var/packages/ffmpeg/target/bin:/opt/bin:$PATH"
 
     # Synchronize DSM UI launcher port and INFO adminport with actual configured port
     if [ -f "$CONFIG_PATH" ]; then

@@ -18,14 +18,22 @@ pub struct StreamRequest {
 }
 
 fn find_ffmpeg() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("FFMPEG_PATH") {
+        let pb = PathBuf::from(p);
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
     for candidate in &[
+        "/var/packages/kvtidal/target/bin/ffmpeg",
         "/usr/bin/ffmpeg",
         "/usr/local/bin/ffmpeg",
         "/bin/ffmpeg",
         "/usr/syno/bin/ffmpeg",
-        "/var/packages/ffmpeg/target/bin/ffmpeg",
-        "/var/packages/ffmpeg6/target/bin/ffmpeg",
         "/var/packages/ffmpeg7/target/bin/ffmpeg",
+        "/var/packages/ffmpeg6/target/bin/ffmpeg",
+        "/var/packages/ffmpeg/target/bin/ffmpeg",
+        "/opt/bin/ffmpeg",
         "ffmpeg",
     ] {
         let p = PathBuf::from(candidate);
