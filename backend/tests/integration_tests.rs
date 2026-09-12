@@ -75,6 +75,26 @@ fn test_library_scanner_empty_and_valid() {
     assert_eq!(artists.len(), 0);
 }
 
+#[test]
+fn test_config_tidal_and_soulseek_serialization() {
+    let dir = tempdir().unwrap();
+    let cfg_path = dir.path().join("config.json");
+
+    let mut cfg = kv_tidal::config::AppConfig::default();
+    cfg.tidal_access_token = Some("test-bearer-token-123".to_string());
+    cfg.tidal_quality = "HI_RES_LOSSLESS".to_string();
+    cfg.soulseek_enabled = true;
+    cfg.soulseek_url = "http://192.168.1.10:5030".to_string();
+
+    cfg.save(&cfg_path).unwrap();
+
+    let loaded = kv_tidal::config::AppConfig::load_or_create(&cfg_path);
+    assert_eq!(loaded.tidal_access_token, Some("test-bearer-token-123".to_string()));
+    assert_eq!(loaded.tidal_quality, "HI_RES_LOSSLESS");
+    assert_eq!(loaded.soulseek_url, "http://192.168.1.10:5030");
+    assert!(loaded.soulseek_enabled);
+}
+
 #[tokio::test]
 async fn test_download_queue_lifecycle() {
     let queue = kv_tidal::api::download::new_download_queue();

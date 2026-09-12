@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://pkg.khoavo.myds.me/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--15-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
+  <a href="https://pkg.khoavo.myds.me/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--16-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
   <a href="https://hub.docker.com/r/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Docker_Hub-vndangkhoa%2Fkv--tidal-2496ED?style=flat-square&logo=docker" alt="Docker Hub" /></a>
   <a href="https://ghcr.io/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/GHCR.io-vndangkhoa%2Fkv--tidal-181717?style=flat-square&logo=github" alt="GHCR" /></a>
   <a href="https://git.khoavo.myds.me/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Forgejo-git.khoavo.myds.me-FB542B?style=flat-square&logo=git" alt="Forgejo" /></a>
@@ -31,11 +31,21 @@ Built with a high-concurrency **Rust Axum** backend and a responsive **Next.js 1
 
 ## ✨ Key Features
 
+### 💎 Authentic Hi-Res FLAC & Transparent Audio Badges (v1.0.0-16)
+- **Soulseek (`slskd`) Lossless FLAC Engine**: Connect to a local or remote `slskd` daemon to search and retrieve authentic bit-perfect FLAC files (16-bit / 24-bit, 25MB - 80MB) 100% free with zero Tidal subscription and no geo-blocking.
+- **Tidal HiFi Personal Bearer Token**: Enter your personal Tidal subscriber Bearer Token in `/settings` to stream 24-bit / 192kHz Master FLAC bit-perfect directly from Tidal's official CDN (`sp-storage.tidal.com`).
+- **Source-Aware Audio Badges**: Real-time HTTP header inspection (`x-audio-source`) accurately tags your audio on the desktop player, mobile drawer, and Signal Path modal:
+  - `LOCAL BIT-PERFECT` (Cyan) — 24b/96kHz bit-perfect from NAS storage (`/volume2/music`).
+  - `TIDAL MASTER` (Gold) — 24b/192kHz Master FLAC from Tidal CDN.
+  - `SOULSEEK FLAC` (Purple) — Authentic lossless FLAC from Soulseek P2P.
+  - `WEB OPUS` (Amber) — 160 kbps Opus fallback stream when no HiFi account or local file is present.
+
 ### 🎵 100% Full-Length Music Streaming (No 30-Second Cutoffs)
-- **Multi-Tier Stream Resolution Engine**: Resolves full-length, high-bitrate audio streams with automatic failover:
-  1. **Direct Local Invidious (`127.0.0.1:7601`)**: Instant ~10ms stream resolution running natively on your NAS with zero subprocess overhead.
-  2. **Bundled Standalone `yt-dlp`**: Embedded Linux x86_64 ELF binary with built-in Python 3.11+ runtime and custom `TMPDIR` routing, bypassing Synology DSM's `noexec /tmp` mount limitations.
-  3. **High-Reliability Public Invidious Grid**: Automatic fallback network across global Invidious instances (`inv.tux.pizza`, `invidious.nerdvpn.de`, `yewtu.be`).
+- **Multi-Tier Stream Resolution Engine**: Resolves full-length audio streams with automatic failover:
+  1. **Direct Tidal HiFi CDN**: Bit-perfect master FLAC when user token is configured.
+  2. **Direct Local Invidious (`127.0.0.1:7601`)**: Instant ~10ms stream resolution running natively on your NAS with zero subprocess overhead.
+  3. **Bundled Standalone `yt-dlp`**: Embedded Linux x86_64 ELF binary with built-in Python 3.11+ runtime and custom `TMPDIR` routing, bypassing Synology DSM's `noexec /tmp` mount limitations.
+  4. **High-Reliability Public Invidious Grid**: Automatic fallback network across global Invidious instances (`inv.tux.pizza`, `invidious.nerdvpn.de`, `yewtu.be`).
 - **Full HTTP Range Seeking**: Scrub and jump to any timestamp with zero latency using chunked byte-range requests.
 
 ### 🎛️ Studio-Grade DSD Transcoding & Bitstream Playback

@@ -123,15 +123,34 @@ export function AudioPlayer() {
     });
   };
 
-  // Audiophile badge format
-  const bitDepth = currentTrack.bitDepth || (currentTrack.hires ? 24 : 16);
+  // Audiophile badge format & Real Source Distinction
+  const isLocal = currentTrack.source?.includes("local") || currentTrack.id.startsWith("/");
+  const isTidalMaster = currentTrack.source === "tidal-direct-hifi";
+  const isSoulseek = currentTrack.source === "soulseek-lossless";
+  const isWebOpus = currentTrack.source === "web-stream-opus" || (!isLocal && !isTidalMaster && !isSoulseek && !currentTrack.isDsd);
+
+  const bitDepth = currentTrack.bitDepth || (isWebOpus ? 16 : currentTrack.hires ? 24 : 16);
   const sampleRateKhz = currentTrack.sampleRate
     ? (currentTrack.sampleRate / 1000).toFixed(1)
+    : isWebOpus
+    ? "48.0"
     : currentTrack.hires
     ? "96.0"
     : "44.1";
-  const formatName = currentTrack.format || (currentTrack.isDsd ? "DSD64" : "FLAC");
-  const isHiRes = bitDepth > 16 || parseFloat(sampleRateKhz) > 44.1;
+
+  const formatName = currentTrack.format || (isWebOpus ? "WebM Opus" : currentTrack.isDsd ? "DSD64" : "FLAC");
+  const isHiRes = (bitDepth > 16 || parseFloat(sampleRateKhz) > 44.1) && !isWebOpus;
+  const bitrateDisplay = isWebOpus
+    ? "160 kbps"
+    : `${currentTrack.bitrate || (isHiRes ? 2800 : 960)} kbps`;
+
+  const sourceLabel = isLocal
+    ? "NAS Vault (Bit-Perfect)"
+    : isTidalMaster
+    ? "Tidal HiFi Master CDN"
+    : isSoulseek
+    ? "Soulseek Lossless P2P"
+    : "Online Web Stream (Opus 160k)";
 
   const progressPercent = duration > 0 ? (progress / duration) * 100 : 0;
 
@@ -175,8 +194,7 @@ export function AudioPlayer() {
             </div>
             {/* Live Codec Stream Sub-label */}
             <div className="text-[10px] font-mono text-textSecondary/80 truncate mt-0.5">
-              {formatName} • {bitDepth}b/{sampleRateKhz}kHz • ~
-              {currentTrack.bitrate || (isHiRes ? 2800 : 960)} kbps
+              {formatName} • {bitDepth}b/{sampleRateKhz}kHz • {bitrateDisplay}
             </div>
           </div>
 
@@ -317,17 +335,29 @@ export function AudioPlayer() {
 
         {/* Right Zone: Audiophile MAX Badge, Tools & Padlocked Bit-Perfect Volume */}
         <div className="flex items-center justify-end space-x-2 w-1/4">
-          {/* TIDAL MAX / HIGH Badge Pill Button */}
+          {/* Transparent Audiophile Quality Badge Pill */}
           <button
             onClick={() => setIsSignalPathOpen(true)}
-            title="Inspect Bit-Perfect Signal Path"
-            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-all hover:scale-105 cursor-pointer ${
-              isHiRes
-                ? "border border-badgeMax/50 bg-badgeMaxBg text-badgeMax"
-                : "border border-primary/50 bg-primary/10 text-primary"
+            title={`Inspect Signal Path (${sourceLabel})`}
+            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-all hover:scale-105 cursor-pointer flex items-center space-x-1 ${
+              isLocal
+                ? "border border-cyan-400/60 bg-cyan-500/15 text-cyan-300 shadow-[0_0_10px_rgba(0,255,255,0.2)]"
+                : isTidalMaster
+                ? "border border-amber-400/60 bg-amber-500/15 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+                : isSoulseek
+                ? "border border-purple-400/60 bg-purple-500/15 text-purple-300 shadow-[0_0_10px_rgba(168,85,247,0.2)]"
+                : "border border-amber-500/40 bg-amber-500/10 text-amber-400"
             }`}
           >
-            {isHiRes ? "MAX" : "HIGH"}
+            <span>
+              {isLocal
+                ? "LOCAL BIT-PERFECT"
+                : isTidalMaster
+                ? "TIDAL MASTER"
+                : isSoulseek
+                ? "SOULSEEK FLAC"
+                : "WEB OPUS"}
+            </span>
           </button>
 
           {/* Audiophile DR Score Badge */}
@@ -490,13 +520,23 @@ export function AudioPlayer() {
         <div className="flex items-center space-x-1 flex-shrink-0 ml-2">
           {/* Audio Quality Tag */}
           <span
-            className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold ${
-              isHiRes
-                ? "bg-badgeMaxBg text-badgeMax border border-badgeMax/30"
-                : "bg-primary/10 text-primary border border-primary/20"
+            className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border ${
+              isLocal
+                ? "border-cyan-500/40 bg-cyan-500/15 text-cyan-300"
+                : isTidalMaster
+                ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+                : isSoulseek
+                ? "border-purple-500/40 bg-purple-500/15 text-purple-300"
+                : "border-amber-500/30 bg-amber-500/10 text-amber-400"
             }`}
           >
-            {isHiRes ? "MAX" : "HIGH"}
+            {isLocal
+              ? "LOCAL"
+              : isTidalMaster
+              ? "MASTER"
+              : isSoulseek
+              ? "SOULSEEK"
+              : "OPUS"}
           </span>
 
           {currentTrack.drScore && (
@@ -546,11 +586,11 @@ export function AudioPlayer() {
             <ChevronDown className="w-6 h-6" />
           </button>
           <div className="text-center">
-            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-textSecondary">
-              Playing from Synology NAS
+            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+              {sourceLabel}
             </span>
             <p className="text-xs font-semibold text-white truncate max-w-[200px]">
-              {currentTrack.album || "TIDAL Master Stream"}
+              {currentTrack.album || formatName}
             </p>
           </div>
           <button

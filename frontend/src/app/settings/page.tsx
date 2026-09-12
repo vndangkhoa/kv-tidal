@@ -71,6 +71,23 @@ export default function SettingsPage() {
   const [subsonicUser, setSubsonicUser] = useState<string>("admin");
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
 
+  // Tidal HiFi Settings State
+  const [tidalToken, setTidalToken] = useState("");
+  const [showTidalToken, setShowTidalToken] = useState(false);
+  const [tidalTokenMasked, setTidalTokenMasked] = useState<string | null>(null);
+  const [tidalQuality, setTidalQuality] = useState("HI_RES_LOSSLESS");
+  const [tidalHasToken, setTidalHasToken] = useState(false);
+  const [testingTidal, setTestingTidal] = useState(false);
+  const [tidalStatusMsg, setTidalStatusMsg] = useState<{ success: boolean; text: string } | null>(null);
+
+  // Soulseek Lossless Engine State
+  const [soulseekEnabled, setSoulseekEnabled] = useState(true);
+  const [soulseekUrl, setSoulseekUrl] = useState("http://127.0.0.1:5030");
+  const [soulseekApiKey, setSoulseekApiKey] = useState("");
+  const [soulseekHasApiKey, setSoulseekHasApiKey] = useState(false);
+  const [testingSoulseek, setTestingSoulseek] = useState(false);
+  const [soulseekStatusMsg, setSoulseekStatusMsg] = useState<{ success: boolean; text: string; version?: string } | null>(null);
+
   const fetchSettings = async () => {
     try {
       const resp = await fetch("/api/library");
@@ -80,8 +97,82 @@ export default function SettingsPage() {
         if (data.port) setServerPort(String(data.port));
         if (data.subsonic_user) setSubsonicUser(data.subsonic_user);
       }
+
+      const settingsResp = await fetch("/api/settings");
+      if (settingsResp.ok) {
+        const sdata = await settingsResp.json();
+        setTidalHasToken(sdata.tidal_has_token);
+        setTidalTokenMasked(sdata.tidal_token_masked);
+        setTidalQuality(sdata.tidal_quality || "HI_RES_LOSSLESS");
+        setSoulseekEnabled(sdata.soulseek_enabled);
+        setSoulseekUrl(sdata.soulseek_url || "http://127.0.0.1:5030");
+        setSoulseekHasApiKey(sdata.soulseek_has_api_key);
+      }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleSaveTidal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTestingTidal(true);
+    setTidalStatusMsg(null);
+    try {
+      const resp = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tidal_access_token: tidalToken ? tidalToken : undefined,
+          tidal_quality: tidalQuality,
+        }),
+      });
+      if (resp.ok) {
+        const testResp = await fetch("/api/settings/test-tidal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: tidalToken || undefined }),
+        });
+        const testData = await testResp.json();
+        setTidalStatusMsg({ success: testData.success, text: testData.message });
+        fetchSettings();
+        setTidalToken("");
+      }
+    } catch (e: any) {
+      setTidalStatusMsg({ success: false, text: e.message || "Failed saving Tidal settings" });
+    } finally {
+      setTestingTidal(false);
+    }
+  };
+
+  const handleSaveSoulseek = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTestingSoulseek(true);
+    setSoulseekStatusMsg(null);
+    try {
+      const resp = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soulseek_enabled: soulseekEnabled,
+          soulseek_url: soulseekUrl,
+          soulseek_api_key: soulseekApiKey ? soulseekApiKey : undefined,
+        }),
+      });
+      if (resp.ok) {
+        const testResp = await fetch("/api/settings/test-soulseek", { method: "POST" });
+        const testData = await testResp.json();
+        setSoulseekStatusMsg({
+          success: testData.success,
+          text: testData.message,
+          version: testData.version,
+        });
+        fetchSettings();
+        setSoulseekApiKey("");
+      }
+    } catch (e: any) {
+      setSoulseekStatusMsg({ success: false, text: e.message || "Failed saving Soulseek settings" });
+    } finally {
+      setTestingSoulseek(false);
     }
   };
 
@@ -463,6 +554,188 @@ export default function SettingsPage() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* 1. Tidal HiFi Direct Master Streaming Engine */}
+      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <Zap className="w-5 h-5 text-amber-400" />
+            <div>
+              <h2 className="text-lg font-bold text-textPrimary">Tidal HiFi Master FLAC Engine</h2>
+              <p className="text-xs text-textSecondary mt-0.5">
+                Stream 24-bit / 192kHz Master FLAC bit-perfect directly from Tidal's official CDN (<code className="text-amber-400 font-mono">sp-storage.tidal.com</code>) using your personal subscriber Bearer Token.
+              </p>
+            </div>
+          </div>
+          <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border self-start sm:self-auto ${
+            tidalHasToken
+              ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+              : "bg-card text-textSecondary border-border"
+          }`}>
+            {tidalHasToken ? "DIRECT MASTER ACTIVE" : "ONLINE FALLBACK MODE"}
+          </span>
+        </div>
+
+        <form onSubmit={handleSaveTidal} className="space-y-4 pt-1">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="md:col-span-2 space-y-1.5">
+              <label className="text-xs font-semibold text-textSecondary flex items-center justify-between">
+                <span>Tidal Session Bearer Token / OAuth Token</span>
+                {tidalTokenMasked && (
+                  <span className="text-[11px] font-mono text-amber-400 font-normal">
+                    Configured: {tidalTokenMasked}
+                  </span>
+                )}
+              </label>
+              <div className="relative">
+                <input
+                  type={showTidalToken ? "text" : "password"}
+                  value={tidalToken}
+                  onChange={(e) => setTidalToken(e.target.value)}
+                  placeholder={tidalHasToken ? "Leave empty to keep current token, or paste new token..." : "Paste your Bearer token (e.g. eyJhbGci...)"}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-amber-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowTidalToken(!showTidalToken)}
+                  className="absolute right-3 top-2.5 text-textSecondary hover:text-white"
+                >
+                  {showTidalToken ? <Lock className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-textSecondary">Stream Quality Target</label>
+              <select
+                value={tidalQuality}
+                onChange={(e) => setTidalQuality(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-amber-400 text-xs font-mono text-white outline-none cursor-pointer"
+              >
+                <option value="HI_RES_LOSSLESS">HI_RES_LOSSLESS (24-bit / 192kHz)</option>
+                <option value="LOSSLESS">LOSSLESS (16-bit / 44.1kHz FLAC)</option>
+                <option value="HIGH">HIGH (320 kbps AAC)</option>
+              </select>
+            </div>
+          </div>
+
+          {tidalStatusMsg && (
+            <div className={`p-3 rounded-xl border text-xs font-mono flex items-center space-x-2 ${
+              tidalStatusMsg.success
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                : "bg-red-500/10 border-red-500/30 text-red-400"
+            }`}>
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+              <span>{tidalStatusMsg.text}</span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[11px] text-textSecondary">
+              Tip: Without a token, online trending tracks will gracefully resolve via high-speed Opus fallback (~160kbps).
+            </span>
+            <button
+              type="submit"
+              disabled={testingTidal}
+              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-semibold text-xs rounded-xl transition-all shadow-md flex items-center space-x-1.5 cursor-pointer"
+            >
+              {testingTidal && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+              <span>Save & Verify Tidal Token</span>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* 2. Soulseek (slskd) Lossless FLAC Engine */}
+      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <Radio className="w-5 h-5 text-purple-400" />
+            <div>
+              <h2 className="text-lg font-bold text-textPrimary">Soulseek Lossless FLAC Engine (100% Free)</h2>
+              <p className="text-xs text-textSecondary mt-0.5">
+                Connect to a Soulseek (<code className="text-purple-400 font-mono">slskd</code>) daemon to discover and download authentic bit-perfect FLAC (16-bit / 24-bit, 25MB - 80MB) with no Tidal accounts and zero geo-blocking.
+              </p>
+            </div>
+          </div>
+          <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border self-start sm:self-auto ${
+            soulseekStatusMsg?.success
+              ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
+              : soulseekEnabled
+              ? "bg-card text-textSecondary border-border"
+              : "bg-red-500/10 text-red-400 border-red-500/20"
+          }`}>
+            {soulseekStatusMsg?.success
+              ? `CONNECTED (${soulseekStatusMsg.version || "slskd"})`
+              : soulseekEnabled
+              ? "ENABLED"
+              : "DISABLED"}
+          </span>
+        </div>
+
+        <form onSubmit={handleSaveSoulseek} className="space-y-4 pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="sm:col-span-2 space-y-1.5">
+              <label className="text-xs font-semibold text-textSecondary">slskd REST API Base URL</label>
+              <input
+                type="text"
+                value={soulseekUrl}
+                onChange={(e) => setSoulseekUrl(e.target.value)}
+                placeholder="http://127.0.0.1:5030 or http://192.168.1.10:5030"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-textSecondary">API Key (Optional)</label>
+              <input
+                type="password"
+                value={soulseekApiKey}
+                onChange={(e) => setSoulseekApiKey(e.target.value)}
+                placeholder={soulseekHasApiKey ? "•••••••• (configured)" : "Leave blank if no auth"}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-3">
+            <input
+              type="checkbox"
+              id="slskd_enabled"
+              checked={soulseekEnabled}
+              onChange={(e) => setSoulseekEnabled(e.target.checked)}
+              className="w-4 h-4 rounded bg-card border-border text-purple-500 accent-purple-500 focus:ring-0 cursor-pointer"
+            />
+            <label htmlFor="slskd_enabled" className="text-xs text-textSecondary cursor-pointer select-none">
+              Prioritize Soulseek network for authentic 25MB - 80MB FLAC master retrieval during download requests
+            </label>
+          </div>
+
+          {soulseekStatusMsg && (
+            <div className={`p-3 rounded-xl border text-xs font-mono flex items-center space-x-2 ${
+              soulseekStatusMsg.success
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                : "bg-amber-500/10 border-amber-500/30 text-amber-400"
+            }`}>
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+              <span>{soulseekStatusMsg.text}</span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[11px] text-textSecondary">
+              Default slskd port is <code className="text-purple-400">5030</code>.
+            </span>
+            <button
+              type="submit"
+              disabled={testingSoulseek}
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl transition-all shadow-md flex items-center space-x-1.5 cursor-pointer"
+            >
+              {testingSoulseek && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+              <span>Save & Test slskd Connection</span>
+            </button>
+          </div>
+        </form>
       </div>
 
       {/* Mapped Music Folders Section */}

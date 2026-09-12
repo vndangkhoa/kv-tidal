@@ -7,6 +7,7 @@ pub mod lyrics;
 pub mod recommendations;
 pub mod search;
 pub mod search_tracker;
+pub mod settings;
 pub mod stream;
 pub mod trending;
 
@@ -22,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .nest("/library", library::router())
         .nest("/fs", fs::router())
         .nest("/stream", stream::router())
+        .nest("/settings", settings::router())
         .nest("/lyrics", lyrics::router())
         .nest("/recommendations", recommendations::router())
         .nest("/devices", devices::router())

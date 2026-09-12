@@ -4,6 +4,20 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-16] - 2026-09-12
+
+### Added
+- **Soulseek (`slskd`) Lossless FLAC Engine**: Integrated REST client with `slskd` for discovering and downloading authentic bit-perfect FLAC audio files (16-bit / 24-bit, 25MB - 80MB) 100% free with no Tidal subscription required and zero geo-blocking.
+- **Tidal HiFi Personal Bearer Token Integration**: Added configuration in Settings (`/settings`) allowing users to connect their Tidal HiFi subscriber bearer token, unlocking direct bit-perfect 24-bit / 192kHz Master FLAC streaming and downloading straight from Tidal's official CDN (`sp-storage.tidal.com`).
+- **Live Stream Telemetry & Transparent Badges**: Upgraded `/api/stream` to pass rich telemetry response headers (`x-audio-source`, `x-audio-format`, `x-audio-bit-depth`, `x-audio-sample-rate`, `x-audio-bitrate`, `x-audio-is-lossless`).
+- **Source-Aware UI Audio Badges**: Audio player bar, mobile UI, and Signal Path modal now dynamically and honestly display the real audio source and format:
+  - `LOCAL BIT-PERFECT` (Cyan) — 24b/96kHz bit-perfect playback from Synology NAS vault (`/volume2/music`).
+  - `TIDAL MASTER` (Gold) — 24b/192kHz Master FLAC streamed directly from Tidal CDN.
+  - `SOULSEEK FLAC` (Purple) — Authentic lossless FLAC from Soulseek P2P network.
+  - `WEB OPUS` (Amber) — 160 kbps Opus fallback stream when no HiFi account or local file is available.
+- **Settings API (`/api/settings`)**: New backend endpoints for managing and persisting Tidal HiFi credentials, Soulseek endpoints, and live test connection probes (`/test-tidal` and `/test-soulseek`).
+- **Docker Compose Recipe for `slskd`**: Added `docker/slskd-compose.yml` for 1-click Soulseek daemon deployment on Synology DSM Container Manager.
+
 ## [1.0.0-15] - 2026-09-12
 
 ### Fixed

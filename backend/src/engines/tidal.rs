@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 
 // Well-known client tokens used by open-source clients (Fire TV / Desktop)
@@ -35,10 +36,17 @@ pub struct TidalEngine {
     client: reqwest::Client,
     token: String,
     country_code: String,
+    pub user_bearer_token: Arc<tokio::sync::RwLock<Option<String>>>,
+    pub audio_quality: Arc<tokio::sync::RwLock<String>>,
 }
 
 impl TidalEngine {
-    pub fn new(token: Option<String>, country_code: Option<String>) -> Self {
+    pub fn new(
+        token: Option<String>,
+        country_code: Option<String>,
+        user_bearer: Option<String>,
+        quality: Option<String>,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .user_agent("TIDAL_ANDROID/1039 okhttp/4.9.3")
@@ -49,6 +57,48 @@ impl TidalEngine {
             client,
             token: token.unwrap_or_else(|| DEFAULT_TIDAL_TOKEN.to_string()),
             country_code: country_code.unwrap_or_else(|| "US".to_string()),
+            user_bearer_token: Arc::new(tokio::sync::RwLock::new(user_bearer)),
+            audio_quality: Arc::new(tokio::sync::RwLock::new(
+                quality.unwrap_or_else(|| "HI_RES_LOSSLESS".to_string()),
+            )),
+        }
+    }
+
+    pub async fn set_credentials(&self, token: Option<String>, quality: Option<String>) {
+        if let Some(t) = token {
+            let mut w = self.user_bearer_token.write().await;
+            *w = if t.trim().is_empty() { None } else { Some(t.trim().to_string()) };
+        }
+        if let Some(q) = quality {
+            let mut w = self.audio_quality.write().await;
+            *w = q;
+        }
+    }
+
+    pub async fn test_bearer_token(&self, token: &str) -> Result<String, String> {
+        let clean = token.trim();
+        if clean.is_empty() {
+            return Err("Token is empty".to_string());
+        }
+
+        // Test with track streamurl or playbackinfopostpaywall
+        let test_url = "https://api.tidal.com/v1/tracks/77701758/streamurl?soundQuality=LOSSLESS";
+        let resp = self
+            .client
+            .get(test_url)
+            .header("Authorization", format!("Bearer {}", clean))
+            .send()
+            .await
+            .map_err(|e| format!("Network error validating Tidal token: {}", e))?;
+
+        if resp.status().is_success() {
+            Ok("Tidal HiFi Token is active and valid! Direct Master/Lossless streaming enabled.".to_string())
+        } else if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            Err("Tidal rejected token: HTTP 401 Unauthorized (Expired or invalid token)".to_string())
+        } else if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            Err("Tidal rejected token: HTTP 403 Forbidden (Region restricted or subscription inactive)".to_string())
+        } else {
+            Err(format!("Tidal token check returned HTTP {}", resp.status()))
         }
     }
 
@@ -123,19 +173,48 @@ impl TidalEngine {
         Ok(tracks)
     }
 
-    /// Resolve postpaywall FLAC stream URL from Tidal manifest
+    /// Resolve postpaywall FLAC stream URL from Tidal manifest or direct streamurl
     pub async fn resolve_stream_url(
         &self,
         track_id: &str,
         session_bearer: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let bearer_guard = self.user_bearer_token.read().await;
+        let quality_guard = self.audio_quality.read().await;
+        let effective_bearer = session_bearer.or(bearer_guard.as_deref());
+        let quality = if quality_guard.is_empty() { "LOSSLESS" } else { &quality_guard };
+
+        // 1. If bearer token is present, try fast direct streamurl endpoint
+        if let Some(bearer) = effective_bearer {
+            let direct_url = format!(
+                "https://api.tidal.com/v1/tracks/{}/streamurl?soundQuality={}",
+                track_id, quality
+            );
+            if let Ok(resp) = self
+                .client
+                .get(&direct_url)
+                .header("Authorization", format!("Bearer {}", bearer))
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let Some(u) = json.get("url").and_then(|v| v.as_str()) {
+                            return Ok(u.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Try playbackinfopostpaywall/v4
         let url = format!(
-            "https://api.tidal.com/v1/tracks/{}/playbackinfopostpaywall/v4?audioquality=LOSSLESS&playbackmode=STREAM&assetpresentation=FULL",
-            track_id
+            "https://api.tidal.com/v1/tracks/{}/playbackinfopostpaywall/v4?audioquality={}&playbackmode=STREAM&assetpresentation=FULL",
+            track_id, quality
         );
 
         let mut req = self.client.get(&url);
-        if let Some(bearer) = session_bearer {
+        if let Some(bearer) = effective_bearer {
             req = req.header("Authorization", format!("Bearer {}", bearer));
         } else {
             req = req.header("x-tidal-token", &self.token);

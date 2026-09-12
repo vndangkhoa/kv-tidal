@@ -731,6 +731,33 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           .catch((err) => {
             console.warn("Autoplay blocked or stream error:", err);
           });
+
+        // Asynchronously probe stream headers for 100% transparent audio badges
+        fetch(track.streamUrl, { method: "HEAD" })
+          .then((res) => {
+            const liveSource = res.headers.get("x-audio-source");
+            const liveFormat = res.headers.get("x-audio-format");
+            const liveBitDepth = res.headers.get("x-audio-bit-depth");
+            const liveSampleRate = res.headers.get("x-audio-sample-rate");
+            const liveBitrate = res.headers.get("x-audio-bitrate");
+            const liveIsLossless = res.headers.get("x-audio-is-lossless");
+
+            if (liveSource || liveFormat) {
+              setCurrentTrack((prev) => {
+                if (!prev || prev.id !== track.id) return prev;
+                return {
+                  ...prev,
+                  source: liveSource || prev.source,
+                  format: liveFormat || prev.format,
+                  bitDepth: liveBitDepth ? parseInt(liveBitDepth, 10) : prev.bitDepth,
+                  sampleRate: liveSampleRate ? parseInt(liveSampleRate, 10) : prev.sampleRate,
+                  bitrate: liveBitrate ? parseInt(liveBitrate, 10) : prev.bitrate,
+                  hires: liveIsLossless !== null ? liveIsLossless === "true" : prev.hires,
+                };
+              });
+            }
+          })
+          .catch(() => {});
       }
 
       // Pre-load lyrics and recommendations asynchronously
@@ -1179,14 +1206,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const getSignalPath = useCallback((): AudioSignalPath => {
     const track = currentTrack;
     const ctxSampleRate = audioContextRef.current?.sampleRate || 48000;
-    const isLocal = track?.source === "local" || track?.id?.startsWith("local-");
+    const isLocal = track?.source?.includes("local") || track?.id?.startsWith("/") || track?.id?.startsWith("local-");
+    const isTidalMaster = track?.source === "tidal-direct-hifi";
+    const isSoulseek = track?.source === "soulseek-lossless";
     const isQobuz = track?.source === "qobuz" || track?.id?.startsWith("qobuz-");
-    const isTidal = track?.source === "tidal" || track?.id?.startsWith("tidal-");
+    const isWebOpus = track?.source === "web-stream-opus" || (!isLocal && !isTidalMaster && !isSoulseek && !isQobuz && !track?.isDsd);
 
-    let format = "AAC";
+    let format = "FLAC";
     let bitDepth = 16;
-    let trackSampleRate = 48000;
-    let bitrate = 160;
+    let trackSampleRate = 44100;
+    let bitrate = 960;
     let provider = "Online Audio Stream";
     let isLossless = false;
     let qualityLabel = "High Quality Web Stream";
@@ -1200,14 +1229,30 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       isLossless = true;
       qualityLabel = "DSD Studio Master";
     } else if (isLocal) {
-      provider = "Synology NAS Bit-Perfect Storage";
-      format = track?.format || "FLAC";
+      provider = "Synology NAS Bit-Perfect Vault (/volume2/music)";
+      format = track?.format?.toUpperCase() || "FLAC";
+      bitDepth = track?.bitDepth || 24;
+      trackSampleRate = track?.sampleRate || 96000;
+      bitrate = track?.bitrate || 2400;
+      isLossless = true;
+      qualityLabel =
+        bitDepth >= 24 || trackSampleRate > 44100 ? "Local Hi-Res Master" : "Lossless CD Quality";
+    } else if (isTidalMaster) {
+      provider = "Tidal HiFi Master CDN (sp-storage.tidal.com)";
+      format = "FLAC (Master MQA/Hi-Res)";
+      bitDepth = track?.bitDepth || 24;
+      trackSampleRate = track?.sampleRate || 96000;
+      bitrate = track?.bitrate || 2500;
+      isLossless = true;
+      qualityLabel = "Tidal 24-bit Master Direct";
+    } else if (isSoulseek) {
+      provider = "Soulseek Lossless P2P Network";
+      format = "FLAC (Bit-Perfect Rip)";
       bitDepth = track?.bitDepth || 16;
       trackSampleRate = track?.sampleRate || 44100;
       bitrate = track?.bitrate || 960;
       isLossless = true;
-      qualityLabel =
-        bitDepth >= 24 || trackSampleRate > 44100 ? "Hi-Res Master" : "Lossless CD Quality";
+      qualityLabel = "Soulseek Lossless FLAC";
     } else if (isQobuz) {
       provider = "Qobuz Studio Master (Lossless Stream)";
       format = "FLAC";
@@ -1216,22 +1261,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       bitrate = track?.bitrate || 3200;
       isLossless = true;
       qualityLabel = "Qobuz Hi-Res Master";
-    } else if (isTidal) {
-      provider = "Tidal Hi-Fi Master (Lossless Stream)";
-      format = "FLAC";
-      bitDepth = track?.bitDepth || 16;
-      trackSampleRate = track?.sampleRate || 44100;
-      bitrate = track?.bitrate || 1411;
-      isLossless = true;
-      qualityLabel = "Tidal Max Lossless";
     } else {
-      provider = "Online Stream (Opus / AAC Direct Stream)";
-      format = track?.format && track.format !== "FLAC" ? track.format : "Opus / AAC";
+      provider = "Online Web Stream (Opus 160kbps Fallback)";
+      format = "WebM Opus";
       bitDepth = 16;
       trackSampleRate = 48000;
-      bitrate = track?.bitrate || 160;
+      bitrate = 160;
       isLossless = false;
-      qualityLabel = "High Quality Web Stream";
+      qualityLabel = "Compressed Web Audio";
     }
 
     const activeDev = outputDevices.find((d) => d.id === activeDeviceId);

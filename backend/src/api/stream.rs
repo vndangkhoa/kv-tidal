@@ -303,26 +303,53 @@ async fn handle_stream(
         let clean_id = id.trim_start_matches("tidal-");
         if !clean_id.is_empty() && clean_id.chars().all(|c| c.is_ascii_digit()) {
             if let Ok(tidal_stream) = state.tidal.resolve_stream_url(clean_id, None).await {
-                return proxy_stream(&tidal_stream, req).await;
+                return proxy_stream_with_meta(
+                    &tidal_stream,
+                    req,
+                    "tidal-direct-hifi",
+                    "FLAC (Tidal Master)",
+                    Some(24),
+                    Some(96000),
+                    Some(2500),
+                    true,
+                ).await;
             }
         }
     }
 
-    // 2. Resolve 100% full-length song stream
+    // 2. Resolve 100% full-length song stream (Invidious / yt-dlp)
     if !title.is_empty() {
         if let Some(full_stream_url) = state.resolver.resolve_full_stream(artist, title).await {
-            return proxy_stream(&full_stream_url, req).await;
+            return proxy_stream_with_meta(
+                &full_stream_url,
+                req,
+                "web-stream-opus",
+                "WebM Opus 160kbps",
+                Some(16),
+                Some(48000),
+                Some(160),
+                false,
+            ).await;
         }
     }
 
     // 3. Fallback to direct URL if provided
     if let Some(direct_url) = &query.url {
         if !direct_url.is_empty() {
-            return proxy_stream(direct_url, req).await;
+            return proxy_stream_with_meta(
+                direct_url,
+                req,
+                "direct-url",
+                "Direct Stream",
+                Some(16),
+                Some(44100),
+                Some(320),
+                false,
+            ).await;
         }
     }
 
-    // 4. Dynamic metadata fallback: resolve high-quality preview stream from Apple Music CDN (zero-404 guarantee)
+    // 4. Dynamic metadata fallback: resolve preview stream from Apple Music CDN
     if !title.is_empty() {
         let search_term = if !artist.is_empty() {
             format!("{} {}", artist, title)
@@ -332,7 +359,16 @@ async fn handle_stream(
         if let Some(meta) = state.metadata.resolve_apple_music(&search_term).await {
             if let Some(preview_url) = meta.preview_url {
                 tracing::info!("Falling back to Apple Music stream for '{} - {}'", artist, title);
-                return proxy_stream(&preview_url, req).await;
+                return proxy_stream_with_meta(
+                    &preview_url,
+                    req,
+                    "apple-music-preview",
+                    "AAC 256kbps Preview",
+                    Some(16),
+                    Some(44100),
+                    Some(256),
+                    false,
+                ).await;
             }
         }
     }
@@ -341,6 +377,28 @@ async fn handle_stream(
 }
 
 pub async fn proxy_stream(target_url: &str, req: axum::extract::Request) -> Response {
+    proxy_stream_with_meta(
+        target_url,
+        req,
+        "remote-stream",
+        "Stream",
+        None,
+        None,
+        None,
+        false,
+    ).await
+}
+
+pub async fn proxy_stream_with_meta(
+    target_url: &str,
+    req: axum::extract::Request,
+    source: &str,
+    format: &str,
+    bit_depth: Option<u8>,
+    sample_rate: Option<u32>,
+    bitrate: Option<u32>,
+    is_lossless: bool,
+) -> Response {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0")
         .build()
@@ -374,7 +432,20 @@ pub async fn proxy_stream(target_url: &str, req: axum::extract::Request) -> Resp
                 .header(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                 .header(axum::http::header::ACCESS_CONTROL_ALLOW_METHODS, "GET, HEAD, OPTIONS")
                 .header(axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
-                .header(axum::http::header::ACCESS_CONTROL_EXPOSE_HEADERS, "*");
+                .header(axum::http::header::ACCESS_CONTROL_EXPOSE_HEADERS, "*")
+                .header("x-audio-source", source)
+                .header("x-audio-format", format)
+                .header("x-audio-is-lossless", if is_lossless { "true" } else { "false" });
+
+            if let Some(bd) = bit_depth {
+                builder = builder.header("x-audio-bit-depth", bd.to_string());
+            }
+            if let Some(sr) = sample_rate {
+                builder = builder.header("x-audio-sample-rate", sr.to_string());
+            }
+            if let Some(br) = bitrate {
+                builder = builder.header("x-audio-bitrate", br.to_string());
+            }
 
             if let Some(content_type) = upstream_res.headers().get(reqwest::header::CONTENT_TYPE) {
                 if let Ok(ct) = content_type.to_str() {

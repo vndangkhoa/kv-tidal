@@ -23,6 +23,34 @@ pub struct AppConfig {
     pub subsonic_password: String,
     pub download_dir: PathBuf,
     pub libraries: Vec<LibraryConfig>,
+    #[serde(default)]
+    pub tidal_access_token: Option<String>,
+    #[serde(default)]
+    pub tidal_refresh_token: Option<String>,
+    #[serde(default = "default_tidal_quality")]
+    pub tidal_quality: String,
+    #[serde(default = "default_true")]
+    pub soulseek_enabled: bool,
+    #[serde(default = "default_soulseek_url")]
+    pub soulseek_url: String,
+    #[serde(default)]
+    pub soulseek_api_key: Option<String>,
+    #[serde(default)]
+    pub soulseek_username: Option<String>,
+    #[serde(default)]
+    pub soulseek_password: Option<String>,
+}
+
+fn default_tidal_quality() -> String {
+    "HI_RES_LOSSLESS".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_soulseek_url() -> String {
+    "http://127.0.0.1:5030".to_string()
 }
 
 impl Default for AppConfig {
@@ -51,6 +79,14 @@ impl Default for AppConfig {
             .unwrap_or_else(|_| PathBuf::from("./music"));
         let subsonic_user = std::env::var("SUBSONIC_USER").unwrap_or_else(|_| "admin".to_string());
         let subsonic_password = std::env::var("SUBSONIC_PASSWORD").unwrap_or_else(|_| "admin".to_string());
+        let tidal_access_token = std::env::var("TIDAL_ACCESS_TOKEN").ok();
+        let tidal_refresh_token = std::env::var("TIDAL_REFRESH_TOKEN").ok();
+        let tidal_quality = std::env::var("TIDAL_QUALITY").unwrap_or_else(|_| "HI_RES_LOSSLESS".to_string());
+        let soulseek_enabled = std::env::var("SOULSEEK_ENABLED").map(|v| v == "true" || v == "1").unwrap_or(true);
+        let soulseek_url = std::env::var("SOULSEEK_URL").unwrap_or_else(|_| "http://127.0.0.1:5030".to_string());
+        let soulseek_api_key = std::env::var("SOULSEEK_API_KEY").ok();
+        let soulseek_username = std::env::var("SOULSEEK_USERNAME").ok();
+        let soulseek_password = std::env::var("SOULSEEK_PASSWORD").ok();
 
         let default_lib = LibraryConfig {
             name: "NAS Music Library".to_string(),
@@ -70,6 +106,14 @@ impl Default for AppConfig {
             subsonic_password,
             download_dir,
             libraries: vec![default_lib],
+            tidal_access_token,
+            tidal_refresh_token,
+            tidal_quality,
+            soulseek_enabled,
+            soulseek_url,
+            soulseek_api_key,
+            soulseek_username,
+            soulseek_password,
         }
     }
 }

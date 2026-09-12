@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  slskd:
+    image: slskd/slskd:latest
+    container_name: slskd
+    restart: unless-stopped
+    ports:
+      - "5030:5030"
+      - "50300:50300"
+    environment:
+      - SLSKD_APP_DIR=/app
+      - SLSKD_HTTP_PORT=5030
+      # Optional: set an API key or password
+      # - SLSKD_API_KEY=your_secret_api_key
+      # - SLSKD_SLSK_USERNAME=your_soulseek_username
+      # - SLSKD_SLSK_PASSWORD=your_soulseek_password
+    volumes:
+      - /volume2/docker/slskd:/app
+      - /volume2/music:/music

@@ -1,6 +1,6 @@
 use crate::api::search_tracker::SearchVelocityTracker;
 use crate::config::SharedConfig;
-use crate::engines::{MetadataResolver, QobuzEngine, StreamResolver, TidalEngine};
+use crate::engines::{MetadataResolver, QobuzEngine, SoulseekEngine, StreamResolver, TidalEngine};
 use crate::storage::scanner::SharedLibrary;
 use crate::trending::SharedTrending;
 use std::sync::Arc;
@@ -43,6 +43,7 @@ pub struct AppState {
     pub metadata: Arc<MetadataResolver>,
     pub tidal: Arc<TidalEngine>,
     pub qobuz: Arc<QobuzEngine>,
+    pub soulseek: Arc<SoulseekEngine>,
     pub resolver: Arc<StreamResolver>,
     pub search_tracker: Arc<SearchVelocityTracker>,
     pub active_output: Arc<RwLock<ActiveOutputConfig>>,
@@ -56,13 +57,22 @@ impl AppState {
         trending: SharedTrending,
         library: SharedLibrary,
     ) -> Self {
+        let (tidal_token, tidal_quality) = {
+            if let Ok(c) = config.try_read() {
+                (c.tidal_access_token.clone(), Some(c.tidal_quality.clone()))
+            } else {
+                (None, None)
+            }
+        };
+
         Self {
-            config,
+            config: config.clone(),
             trending,
             library,
             metadata: Arc::new(MetadataResolver::new()),
-            tidal: Arc::new(TidalEngine::new(None, None)),
+            tidal: Arc::new(TidalEngine::new(None, None, tidal_token, tidal_quality)),
             qobuz: Arc::new(QobuzEngine::new(None)),
+            soulseek: Arc::new(SoulseekEngine::new(config)),
             resolver: Arc::new(StreamResolver::new()),
             search_tracker: Arc::new(SearchVelocityTracker::new()),
             active_output: Arc::new(RwLock::new(ActiveOutputConfig::default())),

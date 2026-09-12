@@ -323,8 +323,25 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
 
     if let Some(ref id) = payload.track_id {
         if let Ok(tidal_url) = state.tidal.resolve_stream_url(id, None).await {
+            info!("Resolved direct Tidal HiFi stream URL for track download: {}", id);
             if let Ok(bytes) = fetch_audio_from_url_streaming(&tidal_url, &state, &job_id).await {
                 audio_bytes_opt = Some(bytes);
+            }
+        }
+    }
+
+    // Try Soulseek Lossless P2P retrieval if no Tidal HiFi stream
+    if audio_bytes_opt.is_none() {
+        if let Ok(candidates) = state.soulseek.search_flac(&payload.artist, &payload.title).await {
+            if let Some(candidate) = candidates.first() {
+                info!(
+                    "Found Soulseek FLAC file for '{} - {}': {} ({} bytes, user: {})",
+                    payload.artist, payload.title, candidate.filename, candidate.size, candidate.username
+                );
+                let _ = state
+                    .soulseek
+                    .queue_download(&candidate.username, &candidate.filename, candidate.size)
+                    .await;
             }
         }
     }
