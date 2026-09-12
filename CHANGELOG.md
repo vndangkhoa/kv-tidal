@@ -4,6 +4,12 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-5] - 2026-09-12
+
+### Changed
+- **Dynamic Client Setup Info**: The Settings page now dynamically resolves the active host IP and configured port (`26784`) instead of static placeholders, with a one-click copy button for quick setup in Symfonium, Feishin, and Tempo.
+- **Service Account Display**: Fixed permission guide display to reference `sc-kvtidal`.
+
 ## [1.0.0-4] - 2026-09-12
 
 ### Fixed

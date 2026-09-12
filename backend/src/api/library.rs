@@ -36,7 +36,10 @@ async fn get_library_summary(State(state): State<AppState>) -> Json<serde_json::
         "total_albums": albums.len(),
         "total_artists": artists.len(),
         "artists": artists,
-        "albums": albums
+        "albums": albums,
+        "port": cfg.port,
+        "subsonic_user": cfg.subsonic_user,
+        "download_dir": cfg.download_dir,
     }))
 }
 

@@ -24,10 +24,15 @@ fi
 
 # Prefer extracting GLIBC 2.36 compatible binary from docker image if available
 if docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then
-    echo "Using Debian Bookworm (GLIBC 2.36 compatible) binary & static web from docker image..."
+    echo "Using Debian Bookworm (GLIBC 2.36 compatible) binary from docker image..."
     CID=$(docker create vndangkhoa/kv-tidal:latest)
     docker cp "$CID:/app/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
-    docker cp "$CID:/app/web/." "$STAGE_DIR/package/web/"
+    if [ -d "$ROOT_DIR/frontend/out" ]; then
+        echo "Using fresh frontend build from frontend/out..."
+        cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
+    else
+        docker cp "$CID:/app/web/." "$STAGE_DIR/package/web/"
+    fi
     docker rm -f "$CID" >/dev/null
 else
     echo "Docker image not found, building frontend & backend on host..."

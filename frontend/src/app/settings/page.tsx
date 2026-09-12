@@ -65,12 +65,20 @@ export default function SettingsPage() {
     "[Output Mode] Bit-Perfect Direct Stream Active (0.0 dB Voltage Passthrough)",
   ]);
 
+  // Subsonic connection info
+  const [serverHost, setServerHost] = useState<string>("");
+  const [serverPort, setServerPort] = useState<string>("");
+  const [subsonicUser, setSubsonicUser] = useState<string>("admin");
+  const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
+
   const fetchSettings = async () => {
     try {
       const resp = await fetch("/api/library");
       if (resp.ok) {
         const data = await resp.json();
         setFolders(data.mapped_folders || []);
+        if (data.port) setServerPort(String(data.port));
+        if (data.subsonic_user) setSubsonicUser(data.subsonic_user);
       }
     } catch (e) {
       console.error(e);
@@ -78,6 +86,10 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      setServerHost(window.location.hostname);
+      setServerPort(window.location.port || "26784");
+    }
     fetchSettings();
   }, []);
 
@@ -550,22 +562,44 @@ export default function SettingsPage() {
           Connect native high-fidelity apps like <strong>Symfonium</strong> (Android Bit-Perfect USB DAC driver), <strong>Feishin</strong> (Desktop WASAPI/ASIO), <strong>Ample / Tempo</strong> (iOS), or <strong>Substreamer</strong>:
         </p>
 
-        <div className="bg-card/70 border border-border p-4 rounded-xl font-mono text-xs space-y-1.5">
-          <div className="flex justify-between">
+        <div className="bg-card/70 border border-border p-4 rounded-xl font-mono text-xs space-y-2.5">
+          <div className="flex items-center justify-between">
             <span className="text-textSecondary">Server Address:</span>
-            <span className="text-primary font-bold">http://&lt;synology-nas-ip&gt;:8080</span>
+            <div className="flex items-center space-x-2">
+              <span className="text-primary font-bold">
+                {serverHost ? `http://${serverHost}:${serverPort || "26784"}` : "http://<synology-nas-ip>:26784"}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const url = `http://${serverHost || "192.168.1.10"}:${serverPort || "26784"}`;
+                  navigator.clipboard.writeText(url);
+                  setCopiedUrl(true);
+                  setTimeout(() => setCopiedUrl(false), 2000);
+                }}
+                className="px-2 py-0.5 rounded bg-surface border border-border hover:border-primary text-[10px] text-textSecondary hover:text-white transition-colors"
+              >
+                {copiedUrl ? "Copied!" : "Copy URL"}
+              </button>
+            </div>
           </div>
           <div className="flex justify-between">
             <span className="text-textSecondary">Subsonic Endpoint:</span>
-            <span className="text-textPrimary">/rest</span>
+            <span className="text-textPrimary font-bold">/rest</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-textSecondary">Full URL (Symfonium / Feishin):</span>
+            <span className="text-emerald-400 font-bold">
+              {serverHost ? `http://${serverHost}:${serverPort || "26784"}/rest` : "http://<synology-nas-ip>:26784/rest"}
+            </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-textSecondary">Default Username:</span>
-            <span className="text-textPrimary font-bold">admin</span>
+            <span className="text-textSecondary">Username:</span>
+            <span className="text-textPrimary font-bold">{subsonicUser}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-textSecondary">Default Password:</span>
-            <span className="text-textPrimary font-bold">admin</span>
+            <span className="text-textSecondary">Password:</span>
+            <span className="text-textPrimary font-bold">admin <span className="text-textSecondary font-normal text-[11px]">(or your installer password)</span></span>
           </div>
         </div>
       </div>
@@ -630,7 +664,7 @@ export default function SettingsPage() {
           <h2 className="text-lg font-bold text-textPrimary">Synology DSM 7 Permissions Notice</h2>
         </div>
         <p className="text-xs text-textSecondary leading-relaxed">
-          When running as a native <strong>Synology SPK package</strong>, the service account is <code className="text-primary font-mono">sc-kv-tidal</code>. When running in <strong>Docker</strong>, permissions are governed by <code className="text-primary font-mono">PUID: 1000</code> and <code className="text-primary font-mono">PGID: 1000</code>. Files are created with POSIX 664 permissions so they remain fully editable via Windows SMB and Synology File Station.
+          When running as a native <strong>Synology SPK package</strong>, the service account is <code className="text-primary font-mono">sc-kvtidal</code>. When running in <strong>Docker</strong>, permissions are governed by <code className="text-primary font-mono">PUID: 1000</code> and <code className="text-primary font-mono">PGID: 1000</code>. Files are created with POSIX 664 permissions so they remain fully editable via Windows SMB and Synology File Station.
         </p>
       </div>
     </div>
