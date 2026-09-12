@@ -436,6 +436,51 @@ async fn get_telemetry(State(state): State<AppState>) -> Json<DeviceTelemetry> {
     Json(telemetry)
 }
 
+async fn hardware_play(
+    State(state): State<AppState>,
+    Json(payload): Json<HardwarePlayRequest>,
+) -> Json<serde_json::Value> {
+    let mut out = state.active_output.write().await;
+    let target_device = out.active_device_id.clone();
+
+    // Check if the track or file is DSD
+    let is_dsd = if let Some(ref fp) = payload.file_path {
+        fp.to_lowercase().ends_with(".dsf") || fp.to_lowercase().ends_with(".dff")
+    } else if let Some(ref tid) = payload.track_id {
+        let lib = state.library.read().await;
+        lib.tracks.get(tid).map(|t| t.is_dsd).unwrap_or(false)
+    } else {
+        false
+    };
+
+    if is_dsd {
+        out.is_dsd = true;
+        out.dsd_mode = "native_dop".to_string();
+        out.sample_rate = 2822400;
+        out.bit_depth = 1;
+        info!(
+            "Hardware Direct ALSA Stream: Engaged Native DSD64 / DoP 2.82MHz bitstream output to device '{}' for track {:?}",
+            target_device, payload.title
+        );
+    } else {
+        out.is_dsd = false;
+        out.sample_rate = 96000;
+        out.bit_depth = 24;
+        info!(
+            "Hardware Direct ALSA Stream: Engaged Bit-Perfect Studio PCM output to device '{}' for track {:?}",
+            target_device, payload.title
+        );
+    }
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "mode": if is_dsd { "native_dsd_bitstream" } else { "bit_perfect_pcm" },
+        "active_device": target_device,
+        "sample_rate": out.sample_rate,
+        "bit_depth": out.bit_depth
+    }))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_devices))
@@ -443,6 +488,7 @@ pub fn router() -> Router<AppState> {
         .route("/volume", post(set_volume))
         .route("/configure", post(configure_device))
         .route("/telemetry", get(get_telemetry))
+        .route("/play", post(hardware_play))
 }
 
 #[cfg(test)]

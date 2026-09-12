@@ -11,6 +11,7 @@ start_daemon() {
         return 0
     fi
     mkdir -p "$VAR_DIR"
+    export DATA_DIR="${VAR_DIR}"
     export CONFIG_PATH="/var/packages/${PACKAGE}/etc/config.json"
     export WEB_DIR="${INSTALL_DIR}/web"
     export RUST_LOG="info"

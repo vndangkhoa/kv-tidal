@@ -1,6 +1,6 @@
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
-use lofty::tag::Accessor;
+use lofty::tag::{Accessor, TagExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -63,17 +63,70 @@ pub fn new_library_store() -> SharedLibrary {
     Arc::new(RwLock::new(LibraryStore::default()))
 }
 
-pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<LibraryAlbum>, Vec<LibraryArtist>) {
-    let mut tracks = Vec::new();
-    let mut album_map: HashMap<String, (String, String, Option<u32>, Option<PathBuf>, usize)> = HashMap::new();
-    let mut artist_tracks: HashMap<String, usize> = HashMap::new();
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedFileRecord {
+    pub mtime_sec: u64,
+    pub size_bytes: u64,
+    pub track: LibraryTrack,
+}
 
+pub type FileMetadataCache = HashMap<String, CachedFileRecord>;
+
+pub fn get_cache_file_path() -> PathBuf {
+    if let Ok(dir) = std::env::var("DATA_DIR") {
+        return PathBuf::from(dir).join("scanner_cache.json");
+    }
+    if let Ok(cfg_path) = std::env::var("CONFIG_PATH") {
+        let p = PathBuf::from(cfg_path);
+        if let Some(parent) = p.parent().and_then(|p| p.parent()) {
+            let var_dir = parent.join("var");
+            if var_dir.exists() {
+                return var_dir.join("scanner_cache.json");
+            }
+        }
+    }
+    PathBuf::from("./data/scanner_cache.json")
+}
+
+pub fn load_metadata_cache() -> FileMetadataCache {
+    let path = get_cache_file_path();
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Ok(cache) = serde_json::from_str::<FileMetadataCache>(&content) {
+            info!("Loaded scanner cache with {} tracks from {}", cache.len(), path.display());
+            return cache;
+        }
+    }
+    HashMap::new()
+}
+
+pub fn save_metadata_cache(cache: &FileMetadataCache) {
+    let path = get_cache_file_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let temp_path = path.with_extension("tmp");
+    if let Ok(serialized) = serde_json::to_string(cache) {
+        if std::fs::write(&temp_path, serialized).is_ok() {
+            let _ = std::fs::rename(temp_path, path);
+        }
+    }
+}
+
+pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<LibraryAlbum>, Vec<LibraryArtist>) {
     let root_path = root.as_ref();
     if !root_path.exists() {
-        return (tracks, Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
 
     info!("Starting scan of directory: {}", root_path.display());
+    let mut cache = load_metadata_cache();
+    let initial_cache_len = cache.len();
+    let mut cache_hits = 0usize;
+    let mut cache_misses = 0usize;
+
+    let mut tracks = Vec::new();
+    let mut album_map: HashMap<String, (String, String, Option<u32>, Option<PathBuf>, usize)> = HashMap::new();
+    let mut artist_tracks: HashMap<String, usize> = HashMap::new();
 
     for entry in WalkDir::new(root_path)
         .follow_links(true)
@@ -88,29 +141,75 @@ pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<Librar
                     ext_lower.as_str(),
                     "flac" | "mp3" | "m4a" | "alac" | "ogg" | "wav" | "dsf" | "dff" | "ape" | "wv" | "aiff" | "aif"
                 ) {
-                    if let Some(track) = inspect_audio_file(path, &ext_lower) {
-                        let album_key = format!("{} - {}", track.artist, track.album);
-                        let parent_dir = path.parent();
-                        let cover_path = parent_dir.and_then(|p| {
-                            let c1 = p.join("cover.jpg");
-                            let c2 = p.join("folder.jpg");
-                            if c1.exists() {
-                                Some(c1)
-                            } else if c2.exists() {
-                                Some(c2)
+                    let path_str = path.to_string_lossy().to_string();
+                    let metadata = entry.metadata().ok();
+                    let mtime_sec = metadata
+                        .as_ref()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let size_bytes = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+
+                    // Check if file is in cache with identical mtime and size
+                    let track = if let Some(cached) = cache.get(&path_str) {
+                        if cached.mtime_sec == mtime_sec && cached.size_bytes == size_bytes && mtime_sec > 0 {
+                            cache_hits += 1;
+                            Some(cached.track.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let track = match track {
+                        Some(t) => t,
+                        None => {
+                            cache_misses += 1;
+                            if let Some(fresh) = inspect_audio_file(path, &ext_lower) {
+                                cache.insert(
+                                    path_str,
+                                    CachedFileRecord {
+                                        mtime_sec,
+                                        size_bytes,
+                                        track: fresh.clone(),
+                                    },
+                                );
+                                fresh
                             } else {
-                                None
+                                continue;
                             }
-                        });
+                        }
+                    };
 
-                        let album_entry = album_map
-                            .entry(album_key)
-                            .or_insert((track.album.clone(), track.artist.clone(), track.year, cover_path, 0));
-                        album_entry.4 += 1;
+                    let album_key = format!("{} - {}", track.artist, track.album);
+                    let parent_dir = path.parent();
+                    let cover_path = parent_dir.and_then(|p| {
+                        let c1 = p.join("cover.jpg");
+                        let c2 = p.join("folder.jpg");
+                        let c3 = p.join("Cover.jpg");
+                        let c4 = p.join("Folder.jpg");
+                        if c1.exists() {
+                            Some(c1)
+                        } else if c2.exists() {
+                            Some(c2)
+                        } else if c3.exists() {
+                            Some(c3)
+                        } else if c4.exists() {
+                            Some(c4)
+                        } else {
+                            None
+                        }
+                    });
 
-                        *artist_tracks.entry(track.artist.clone()).or_insert(0) += 1;
-                        tracks.push(track);
-                    }
+                    let album_entry = album_map
+                        .entry(album_key)
+                        .or_insert((track.album.clone(), track.artist.clone(), track.year, cover_path, 0));
+                    album_entry.4 += 1;
+
+                    *artist_tracks.entry(track.artist.clone()).or_insert(0) += 1;
+                    tracks.push(track);
                 }
             }
         }
@@ -144,6 +243,20 @@ pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<Librar
         });
     }
 
+    // Save cache if there were new or updated files
+    if cache_misses > 0 || cache.len() != initial_cache_len {
+        info!(
+            "Saving updated scanner cache: {} hits, {} misses/new (total {})",
+            cache_hits,
+            cache_misses,
+            cache.len()
+        );
+        cache.retain(|p, _| Path::new(p).exists());
+        save_metadata_cache(&cache);
+    } else {
+        info!("Scan completed with 100% cache hits ({})", cache_hits);
+    }
+
     info!(
         "Scan completed: {} tracks, {} albums, {} artists",
         tracks.len(),
@@ -152,6 +265,78 @@ pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<Librar
     );
 
     (tracks, albums, artists)
+}
+
+pub fn update_audio_tags(
+    file_path: &Path,
+    title: Option<&str>,
+    artist: Option<&str>,
+    album: Option<&str>,
+    year: Option<u32>,
+    track_number: Option<u32>,
+) -> Result<LibraryTrack, String> {
+    let mut tagged_file = Probe::open(file_path)
+        .map_err(|e| format!("Failed to open file: {}", e))?
+        .read()
+        .map_err(|e| format!("Failed to read file tags: {}", e))?;
+
+    let tag_type = tagged_file.primary_tag_type();
+    let tag = match tagged_file.tag_mut(tag_type) {
+        Some(t) => t,
+        None => {
+            tagged_file.insert_tag(lofty::tag::Tag::new(tag_type));
+            tagged_file.tag_mut(tag_type).unwrap()
+        }
+    };
+
+    if let Some(t) = title {
+        tag.set_title(t.to_string());
+    }
+    if let Some(a) = artist {
+        tag.set_artist(a.to_string());
+    }
+    if let Some(al) = album {
+        tag.set_album(al.to_string());
+    }
+    if let Some(y) = year {
+        tag.insert_text(lofty::tag::ItemKey::Year, y.to_string());
+    }
+    if let Some(tr) = track_number {
+        tag.set_track(tr);
+    }
+
+    tag.save_to_path(file_path, lofty::config::WriteOptions::default())
+        .map_err(|e| format!("Failed to write tags to file: {}", e))?;
+
+    let ext = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let track = inspect_audio_file(file_path, &ext)
+        .ok_or_else(|| "Failed to inspect file after update".to_string())?;
+
+    // Update scanner cache
+    let mut cache = load_metadata_cache();
+    let meta = std::fs::metadata(file_path).ok();
+    let mtime_sec = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    cache.insert(
+        file_path.to_string_lossy().to_string(),
+        CachedFileRecord {
+            mtime_sec,
+            size_bytes,
+            track: track.clone(),
+        },
+    );
+    save_metadata_cache(&cache);
+
+    Ok(track)
 }
 
 pub fn inspect_audio_file(path: &Path, format: &str) -> Option<LibraryTrack> {

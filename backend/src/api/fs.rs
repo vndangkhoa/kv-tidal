@@ -1,6 +1,7 @@
 use crate::state::AppState;
 use crate::storage::permissions::{ensure_dir_permissions, ensure_file_permissions};
 use crate::storage::scanner::{inspect_audio_file, scan_directory};
+use lofty::file::TaggedFileExt;
 use axum::extract::{Multipart, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
@@ -73,6 +74,7 @@ pub struct FsEntry {
     pub album: Option<String>,
     pub duration: Option<u32>,
     pub modified_at: Option<u64>,
+    pub cover_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +167,10 @@ async fn browse_directory(
             )
         } else if let Some(track) = lib_guard
             .as_ref()
-            .and_then(|g| g.tracks.values().find(|t| t.file_path.to_string_lossy() == path))
+            .and_then(|g| {
+                let tid = format!("{:x}", md5::compute(path.as_bytes()));
+                g.tracks.get(&tid)
+            })
         {
             (
                 Some(track.format.to_uppercase()),
@@ -307,7 +312,7 @@ async fn browse_directory(
 
         entries.push(FsEntry {
             name,
-            path,
+            path: path.clone(),
             is_dir,
             size_bytes,
             format,
@@ -323,6 +328,7 @@ async fn browse_directory(
             album,
             duration,
             modified_at,
+            cover_url: Some(format!("/api/fs/cover?path={}", urlencoding::encode(&path))),
         });
     }
 
@@ -618,7 +624,18 @@ async fn scan_path(
         ));
     }
 
-    let (tracks, albums, artists) = scan_directory(&p);
+    let p_clone = p.clone();
+    let (tracks, albums, artists) = tokio::task::spawn_blocking(move || {
+        scan_directory(&p_clone)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Scan failed: {}", e) })),
+        )
+    })?;
+
     let tracks_count = tracks.len();
     let albums_count = albums.len();
     let artists_count = artists.len();
@@ -658,6 +675,273 @@ async fn scan_path(
     })))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateTagsPayload {
+    pub file_path: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<u32>,
+    pub track_number: Option<u32>,
+}
+
+async fn update_tags(
+    State(state): State<AppState>,
+    Json(payload): Json<UpdateTagsPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let p = PathBuf::from(&payload.file_path);
+    if !p.exists() || !p.is_file() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "File not found" })),
+        ));
+    }
+
+    let p_clone = p.clone();
+    let title = payload.title;
+    let artist = payload.artist;
+    let album = payload.album;
+    let year = payload.year;
+    let track_number = payload.track_number;
+
+    let res = tokio::task::spawn_blocking(move || {
+        crate::storage::scanner::update_audio_tags(
+            &p_clone,
+            title.as_deref(),
+            artist.as_deref(),
+            album.as_deref(),
+            year,
+            track_number,
+        )
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Task join error: {}", e) })),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
+
+    // Update library in-memory store
+    {
+        let mut store = state.library.write().await;
+        store.tracks.insert(res.id.clone(), res.clone());
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "track": res
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OrganizeRequest {
+    pub base_dir: String,
+    pub pattern: Option<String>,
+    pub dry_run: bool,
+    pub selected_paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProposedMove {
+    pub source_path: String,
+    pub destination_path: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+}
+
+fn sanitize_path_component(s: &str) -> String {
+    let forbidden = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+    let sanitized: String = s
+        .chars()
+        .map(|c| if forbidden.contains(&c) { '_' } else { c })
+        .collect();
+    let trimmed = sanitized.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        "Unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+async fn organize_files(
+    State(state): State<AppState>,
+    Json(payload): Json<OrganizeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let base = PathBuf::from(&payload.base_dir);
+    if !base.exists() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Base directory does not exist" })),
+        ));
+    }
+
+    let pattern = payload
+        .pattern
+        .unwrap_or_else(|| "{artist}/{album}/{track:02d} - {title}.{ext}".to_string());
+
+    // Gather candidate files
+    let file_paths: Vec<PathBuf> = if let Some(paths) = payload.selected_paths {
+        paths
+            .into_iter()
+            .map(PathBuf::from)
+            .filter(|p| p.is_file())
+            .collect()
+    } else {
+        let mut files = Vec::new();
+        for entry in walkdir::WalkDir::new(&base)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+                    let ext_lower = ext.to_lowercase();
+                    if matches!(
+                        ext_lower.as_str(),
+                        "flac"
+                            | "mp3"
+                            | "m4a"
+                            | "alac"
+                            | "ogg"
+                            | "wav"
+                            | "dsf"
+                            | "dff"
+                            | "ape"
+                            | "wv"
+                            | "aiff"
+                            | "aif"
+                    ) {
+                        files.push(p.to_path_buf());
+                    }
+                }
+            }
+        }
+        files
+    };
+
+    let mut proposed_moves = Vec::new();
+
+    for file_path in &file_paths {
+        let ext = file_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("flac")
+            .to_lowercase();
+
+        let track_info = {
+            let lib = state.library.read().await;
+            let tid = format!("{:x}", md5::compute(file_path.to_string_lossy().as_bytes()));
+            lib.tracks.get(&tid).cloned()
+        };
+
+        let (title, artist, album, track_num, year) = if let Some(t) = track_info {
+            (t.title, t.artist, t.album, t.track_number, t.year)
+        } else if let Some(fresh) = inspect_audio_file(file_path, &ext) {
+            (
+                fresh.title,
+                fresh.artist,
+                fresh.album,
+                fresh.track_number,
+                fresh.year,
+            )
+        } else {
+            continue;
+        };
+
+        let safe_artist = sanitize_path_component(&artist);
+        let safe_album = sanitize_path_component(&album);
+        let safe_title = sanitize_path_component(&title);
+        let track_str = format!("{:02}", track_num);
+        let year_str = year.map(|y| y.to_string()).unwrap_or_default();
+
+        let mut rel_path = pattern.clone();
+        rel_path = rel_path.replace("{artist}", &safe_artist);
+        rel_path = rel_path.replace("{album}", &safe_album);
+        rel_path = rel_path.replace("{track:02d}", &track_str);
+        rel_path = rel_path.replace("{track}", &track_num.to_string());
+        rel_path = rel_path.replace("{title}", &safe_title);
+        rel_path = rel_path.replace("{year}", &year_str);
+        rel_path = rel_path.replace("{ext}", &ext);
+
+        let dest = base.join(rel_path.trim_start_matches('/'));
+        if dest != *file_path {
+            proposed_moves.push(ProposedMove {
+                source_path: file_path.to_string_lossy().to_string(),
+                destination_path: dest.to_string_lossy().to_string(),
+                title,
+                artist,
+                album,
+            });
+        }
+    }
+
+    if payload.dry_run {
+        return Ok(Json(serde_json::json!({
+            "status": "ok",
+            "dry_run": true,
+            "total_candidates": file_paths.len(),
+            "proposed_moves_count": proposed_moves.len(),
+            "proposed_moves": proposed_moves
+        })));
+    }
+
+    let (puid, pgid) = {
+        let cfg = state.config.read().await;
+        (cfg.puid, cfg.pgid)
+    };
+
+    // Execute moves
+    let mut moved_count = 0usize;
+    for m in &proposed_moves {
+        let src = PathBuf::from(&m.source_path);
+        let dst = PathBuf::from(&m.destination_path);
+        if let Some(parent) = dst.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+            ensure_dir_permissions(parent, puid, pgid);
+        }
+        if tokio::fs::rename(&src, &dst).await.is_ok() {
+            ensure_file_permissions(&dst, puid, pgid);
+            moved_count += 1;
+        }
+    }
+
+    // Trigger quick background rescan of base
+    let base_clone = base.clone();
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        let (tracks, albums, artists) =
+            tokio::task::spawn_blocking(move || scan_directory(&base_clone))
+                .await
+                .unwrap_or_default();
+        let mut store = state_clone.library.write().await;
+        for t in tracks {
+            store.tracks.insert(t.id.clone(), t);
+        }
+        for a in albums {
+            store.albums.insert(a.id.clone(), a);
+        }
+        for ar in artists {
+            store.artists.insert(ar.id.clone(), ar);
+        }
+    });
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "dry_run": false,
+        "moved_count": moved_count,
+        "total_attempted": proposed_moves.len()
+    })))
+}
+
 async fn download_file(
     Query(query): Query<DownloadQuery>,
     State(_state): State<AppState>,
@@ -667,18 +951,33 @@ async fn download_file(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let file = fs::File::open(&path).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let file = fs::File::open(&path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let filename = path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "download.flac".to_string());
+
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let content_type = match ext.as_str() {
+        "flac" => "audio/flac",
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "m4a" | "aac" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "opus" => "audio/opus",
+        "aiff" | "aif" => "audio/aiff",
+        "dsf" | "dff" => "audio/x-dsd",
+        _ => "application/octet-stream",
+    };
 
     let stream = ReaderStream::new(file);
     let body = axum::body::Body::from_stream(stream);
 
     Ok((
         [
-            (header::CONTENT_TYPE, "application/octet-stream"),
+            (header::CONTENT_TYPE, content_type),
             (
                 header::CONTENT_DISPOSITION,
                 &format!("attachment; filename=\"{}\"", filename),
@@ -689,14 +988,184 @@ async fn download_file(
         .into_response())
 }
 
+async fn get_cover(
+    Query(query): Query<DownloadQuery>,
+    State(_state): State<AppState>,
+) -> Result<Response, StatusCode> {
+    let path = PathBuf::from(&query.path);
+    if !path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let search_names = [
+        "folder.jpg", "folder.png", "folder.jpeg",
+        "cover.jpg", "cover.png", "cover.jpeg",
+        "front.jpg", "front.png", "front.jpeg",
+        "albumart.jpg", "albumart.png",
+        "Folder.jpg", "Folder.png",
+        "Cover.jpg", "Cover.png",
+        "Front.jpg", "Front.png",
+    ];
+
+    let find_sidecar = |dir: &Path| -> Option<(PathBuf, &'static str)> {
+        for name in &search_names {
+            let p = dir.join(name);
+            if p.exists() && p.is_file() {
+                let ct = if name.ends_with(".png") { "image/png" } else { "image/jpeg" };
+                return Some((p, ct));
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    let fn_lower = p.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+                    if fn_lower.ends_with(".jpg") || fn_lower.ends_with(".jpeg") || fn_lower.ends_with(".png") {
+                        if fn_lower.contains("cover") || fn_lower.contains("folder") || fn_lower.contains("front") || fn_lower.contains("tape") || fn_lower.contains("list") {
+                            let ct = if fn_lower.ends_with(".png") { "image/png" } else { "image/jpeg" };
+                            return Some((p, ct));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    };
+
+    if path.is_file() {
+        // 1. Check parent directory
+        if let Some(parent) = path.parent() {
+            if let Some((p, ct)) = find_sidecar(parent) {
+                if let Ok(bytes) = tokio::fs::read(&p).await {
+                    return Ok((
+                        [
+                            (header::CONTENT_TYPE, ct),
+                            (header::CACHE_CONTROL, "public, max-age=86400"),
+                        ],
+                        bytes,
+                    ).into_response());
+                }
+            }
+
+            // 2. Check grandparent directory (e.g. if parent is "Mat A", "Mat B", "CD1", "CD2", "Disc 1")
+            let p_name = parent.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+            if p_name.starts_with("mat ") || p_name.starts_with("cd") || p_name.starts_with("disc") || p_name.starts_with("side") {
+                if let Some(grandparent) = parent.parent() {
+                    if let Some((p, ct)) = find_sidecar(grandparent) {
+                        if let Ok(bytes) = tokio::fs::read(&p).await {
+                            return Ok((
+                                [
+                                    (header::CONTENT_TYPE, ct),
+                                    (header::CACHE_CONTROL, "public, max-age=86400"),
+                                ],
+                                bytes,
+                            ).into_response());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Inspect embedded tags in audio file using lofty
+        if let Ok(probe) = lofty::probe::Probe::open(&path) {
+            if let Ok(tagged_file) = probe.read() {
+                if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+                    if let Some(pic) = tag.pictures().first() {
+                        let ct = match pic.mime_type() {
+                            Some(lofty::picture::MimeType::Png) => "image/png",
+                            _ => "image/jpeg",
+                        };
+                        let data = pic.data().to_vec();
+                        return Ok((
+                            [
+                                (header::CONTENT_TYPE, ct),
+                                (header::CACHE_CONTROL, "public, max-age=86400"),
+                            ],
+                            data,
+                        ).into_response());
+                    }
+                }
+            }
+        }
+    } else if path.is_dir() {
+        // 1. Check directory itself
+        if let Some((p, ct)) = find_sidecar(&path) {
+            if let Ok(bytes) = tokio::fs::read(&p).await {
+                return Ok((
+                    [
+                        (header::CONTENT_TYPE, ct),
+                        (header::CACHE_CONTROL, "public, max-age=86400"),
+                    ],
+                    bytes,
+                ).into_response());
+            }
+        }
+
+        // 2. Check parent directory if subdisc
+        let d_name = path.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if d_name.starts_with("mat ") || d_name.starts_with("cd") || d_name.starts_with("disc") || d_name.starts_with("side") {
+            if let Some(parent) = path.parent() {
+                if let Some((p, ct)) = find_sidecar(parent) {
+                    if let Ok(bytes) = tokio::fs::read(&p).await {
+                        return Ok((
+                            [
+                                (header::CONTENT_TYPE, ct),
+                                (header::CACHE_CONTROL, "public, max-age=86400"),
+                            ],
+                            bytes,
+                        ).into_response());
+                    }
+                }
+            }
+        }
+
+        // 3. Check first audio file in directory for embedded picture
+        if let Ok(entries) = std::fs::read_dir(&path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    if matches!(ext.as_str(), "flac" | "mp3" | "m4a" | "wav" | "dsf" | "dff") {
+                        if let Ok(probe) = lofty::probe::Probe::open(&p) {
+                            if let Ok(tagged_file) = probe.read() {
+                                if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+                                    if let Some(pic) = tag.pictures().first() {
+                                        let ct = match pic.mime_type() {
+                                            Some(lofty::picture::MimeType::Png) => "image/png",
+                                            _ => "image/jpeg",
+                                        };
+                                        let data = pic.data().to_vec();
+                                        return Ok((
+                                            [
+                                                (header::CONTENT_TYPE, ct),
+                                                (header::CACHE_CONTROL, "public, max-age=86400"),
+                                            ],
+                                            data,
+                                        ).into_response());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/browse", get(browse_directory))
         .route("/transfer", post(transfer_file))
         .route("/download", get(download_file))
+        .route("/cover", get(get_cover))
         .route("/mkdir", post(create_directory))
         .route("/rename", post(rename_item))
         .route("/delete", post(delete_items))
         .route("/upload", post(upload_files))
         .route("/scan", post(scan_path))
+        .route("/tags", axum::routing::put(update_tags))
+        .route("/organize", post(organize_files))
 }

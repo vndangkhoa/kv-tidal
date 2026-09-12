@@ -176,6 +176,7 @@ export interface FsEntry {
   album?: string;
   duration?: number;
   modified_at?: number;
+  cover_url?: string;
 }
 
 export type SignalFidelityRating = "bit-perfect" | "enhanced" | "resampled";

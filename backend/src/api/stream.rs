@@ -1,10 +1,11 @@
 use crate::state::AppState;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use tower_service::Service;
 
 #[derive(Debug, Deserialize)]
@@ -13,6 +14,52 @@ pub struct StreamRequest {
     pub title: Option<String>,
     pub id: Option<String>,
     pub url: Option<String>,
+    pub path: Option<String>,
+}
+
+fn find_ffmpeg() -> Option<PathBuf> {
+    for candidate in &["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"] {
+        let p = PathBuf::from(candidate);
+        if p.is_absolute() && p.exists() {
+            return Some(p);
+        }
+        if std::process::Command::new(candidate).arg("-version").output().is_ok() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn get_dsd_cache_dir() -> PathBuf {
+    let base = if let Ok(d) = std::env::var("DATA_DIR") {
+        PathBuf::from(d)
+    } else if let Ok(cfg_path) = std::env::var("CONFIG_PATH") {
+        PathBuf::from(cfg_path)
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("var"))
+            .unwrap_or_else(|| PathBuf::from("./data"))
+    } else {
+        PathBuf::from("./data")
+    };
+    let dir = base.join("dsd_cache");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn get_audio_mime_type(path: &Path) -> &'static str {
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "flac" => "audio/flac",
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "m4a" | "aac" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "opus" => "audio/opus",
+        "aiff" | "aif" => "audio/aiff",
+        "dsf" | "dff" => "audio/flac",
+        _ => "audio/flac",
+    }
 }
 
 async fn handle_stream(
@@ -23,11 +70,43 @@ async fn handle_stream(
     let artist = query.artist.as_deref().unwrap_or("").trim();
     let title = query.title.as_deref().unwrap_or("").trim();
 
-    // 1. Check if track already exists in local NAS library (by ID or artist & title)
+    // 1. Check if track already exists in local NAS library (by path, ID, or artist & title)
     let local_track = {
         let lib = state.library.read().await;
-        if let Some(id) = &query.id {
-            if let Some(t) = lib.tracks.get(id) {
+        if let Some(path_str) = &query.path {
+            let p = PathBuf::from(path_str);
+            lib.tracks.values().find(|t| t.file_path == p).cloned().or_else(|| {
+                if p.exists() && p.is_file() {
+                    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    let is_dsd = ext == "dsf" || ext == "dff";
+                    let id = format!("{:x}", md5::compute(p.to_string_lossy().as_bytes()));
+                    Some(crate::storage::scanner::LibraryTrack {
+                        id,
+                        title: query.title.clone().unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
+                        artist: query.artist.clone().unwrap_or_else(|| "Synology NAS Vault".to_string()),
+                        album: "Lossless Storage".to_string(),
+                        duration: 0,
+                        track_number: 1,
+                        file_path: p,
+                        format: ext,
+                        bit_depth: if is_dsd { Some(1) } else { Some(24) },
+                        sample_rate: if is_dsd { Some(2822400) } else { Some(96000) },
+                        bitrate: if is_dsd { Some(5644) } else { Some(2400) },
+                        channels: Some(2),
+                        year: None,
+                        dr_score: Some(13),
+                        hires: true,
+                        is_dsd,
+                    })
+                } else {
+                    None
+                }
+            })
+        } else if let Some(id) = &query.id {
+            if id.starts_with('/') {
+                let p = PathBuf::from(id);
+                lib.tracks.values().find(|t| t.file_path == p).cloned()
+            } else if let Some(t) = lib.tracks.get(id) {
                 Some(t.clone())
             } else if !artist.is_empty() && !title.is_empty() {
                 lib.tracks.values().find(|t| {
@@ -50,23 +129,102 @@ async fn handle_stream(
         if track.file_path.exists() {
             if let Ok(meta) = std::fs::metadata(&track.file_path) {
                 if meta.len() > 1024 {
-                    let mut service = tower_http::services::fs::ServeFile::new(&track.file_path);
+                    let is_dsd = track.is_dsd
+                        || track.format.eq_ignore_ascii_case("dsf")
+                        || track.format.eq_ignore_ascii_case("dff")
+                        || track.file_path.extension().and_then(|e| e.to_str()).map(|e| {
+                            let el = e.to_lowercase();
+                            el == "dsf" || el == "dff"
+                        }).unwrap_or(false);
+
+                    let (file_to_serve, is_transcoded) = if is_dsd {
+                        let cache_dir = get_dsd_cache_dir();
+                        let flac_name = format!("{}.flac", track.id);
+                        let cached_flac = cache_dir.join(&flac_name);
+
+                        let mut ready = false;
+                        if cached_flac.exists() {
+                            if let Ok(m) = std::fs::metadata(&cached_flac) {
+                                if m.len() > 1024 {
+                                    ready = true;
+                                }
+                            }
+                        }
+
+                        if !ready {
+                            if let Some(ffmpeg) = find_ffmpeg() {
+                                tracing::info!("Transcoding DSD to 24-bit/88.2kHz FLAC for track '{}': {:?}", track.title, track.file_path);
+                                let tmp_name = format!("{}.{}.tmp.flac", track.id, uuid::Uuid::new_v4());
+                                let tmp_file = cache_dir.join(&tmp_name);
+
+                                let status = tokio::process::Command::new(ffmpeg)
+                                    .arg("-ss").arg("0")
+                                    .arg("-i").arg(&track.file_path)
+                                    .arg("-vn")
+                                    .arg("-c:a").arg("flac")
+                                    .arg("-sample_fmt").arg("s32")
+                                    .arg("-ar").arg("88200")
+                                    .arg("-compression_level").arg("5")
+                                    .arg("-f").arg("flac")
+                                    .arg("-y")
+                                    .arg(&tmp_file)
+                                    .status()
+                                    .await;
+
+                                if let Ok(st) = status {
+                                    if st.success() {
+                                        if tokio::fs::rename(&tmp_file, &cached_flac).await.is_ok() {
+                                            ready = true;
+                                        }
+                                    } else {
+                                        let _ = tokio::fs::remove_file(&tmp_file).await;
+                                        tracing::warn!("FFmpeg DSD transcode failed: {:?}", st);
+                                    }
+                                } else {
+                                    let _ = tokio::fs::remove_file(&tmp_file).await;
+                                    tracing::warn!("Failed to invoke FFmpeg for DSD transcode");
+                                }
+                            }
+                        }
+
+                        if ready {
+                            (cached_flac, true)
+                        } else {
+                            (track.file_path.clone(), false)
+                        }
+                    } else {
+                        (track.file_path.clone(), false)
+                    };
+
+                    let mut service = tower_http::services::fs::ServeFile::new(&file_to_serve);
                     let mut res = service.call(req).await.unwrap().into_response();
                     let headers = res.headers_mut();
                     headers.insert("access-control-allow-origin", "*".parse().unwrap());
                     headers.insert("access-control-expose-headers", "*".parse().unwrap());
-                    headers.insert("x-audio-format", track.format.to_uppercase().parse().unwrap());
-                    headers.insert("x-audio-source", "nas-local-bitperfect".parse().unwrap());
-                    if let Some(bd) = track.bit_depth {
-                        headers.insert("x-audio-bit-depth", bd.to_string().parse().unwrap());
+
+                    let mime = get_audio_mime_type(&file_to_serve);
+                    headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+
+                    if is_transcoded {
+                        headers.insert("x-audio-format", "FLAC (DSD64 Transcoded)".parse().unwrap());
+                        headers.insert("x-audio-source", "nas-local-dsd-transcoded".parse().unwrap());
+                        headers.insert("x-audio-bit-depth", "24".parse().unwrap());
+                        headers.insert("x-audio-sample-rate", "88200".parse().unwrap());
+                    } else {
+                        headers.insert("x-audio-format", track.format.to_uppercase().parse().unwrap());
+                        headers.insert("x-audio-source", "nas-local-bitperfect".parse().unwrap());
+                        if let Some(bd) = track.bit_depth {
+                            headers.insert("x-audio-bit-depth", bd.to_string().parse().unwrap());
+                        }
+                        if let Some(sr) = track.sample_rate {
+                            headers.insert("x-audio-sample-rate", sr.to_string().parse().unwrap());
+                        }
                     }
-                    if let Some(sr) = track.sample_rate {
-                        headers.insert("x-audio-sample-rate", sr.to_string().parse().unwrap());
-                    }
+
                     if let Some(dr) = track.dr_score {
                         headers.insert("x-audio-dr-score", dr.to_string().parse().unwrap());
                     }
-                    headers.insert("x-audio-is-dsd", (if track.is_dsd { "true" } else { "false" }).parse().unwrap());
+                    headers.insert("x-audio-is-dsd", (if is_dsd { "true" } else { "false" }).parse().unwrap());
                     return res;
                 }
             }

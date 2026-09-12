@@ -29,7 +29,25 @@ import {
   FolderSync,
   Loader2,
   Check,
+  Columns,
+  LayoutList,
+  FolderTree,
+  ChevronRight,
+  Music,
+  Disc,
+  Image as ImageIcon,
+  Copy,
+  ExternalLink,
+  ZoomIn,
 } from "lucide-react";
+
+export interface ColumnItem {
+  path: string;
+  title: string;
+  entries: FsEntry[];
+  selectedPath: string | null;
+  loading?: boolean;
+}
 
 export default function FilesPage() {
   const { playTrack, addAllToQueue, activeDeviceId } = usePlayer();
@@ -38,6 +56,33 @@ export default function FilesPage() {
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [diskSpace, setDiskSpace] = useState<DiskUsage | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+
+  // View Mode: 'columns' (macOS Finder style) | 'list' (Classic Table)
+  const [viewMode, setViewMode] = useState<"columns" | "list">("columns");
+  const [columnHistory, setColumnHistory] = useState<ColumnItem[]>([]);
+  const [quickLookFile, setQuickLookFile] = useState<FsEntry | null>(null);
+  const columnsContainerRef = useRef<HTMLDivElement>(null);
+
+  // Tag Editor State
+  const [tagEditFile, setTagEditFile] = useState<FsEntry | null>(null);
+  const [tagForm, setTagForm] = useState({
+    title: "",
+    artist: "",
+    album: "",
+    year: "",
+    track_number: "",
+  });
+  const [isSavingTags, setIsSavingTags] = useState<boolean>(false);
+
+  // Auto-organizer State
+  const [organizeModalOpen, setOrganizeModalOpen] = useState<boolean>(false);
+  const [organizePattern, setOrganizePattern] = useState<string>(
+    "{artist}/{album}/{track:02d} - {title}.{ext}"
+  );
+  const [organizeDryRunResults, setOrganizeDryRunResults] = useState<any | null>(null);
+  const [isOrganizing, setIsOrganizing] = useState<boolean>(false);
+  const [zoomCoverUrl, setZoomCoverUrl] = useState<string | null>(null);
+  const [pathCopied, setPathCopied] = useState<boolean>(false);
 
   // Selection & Filtering
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -77,12 +122,24 @@ export default function FilesPage() {
       const resp = await fetch(url);
       if (resp.ok) {
         const data = await resp.json();
-        setCurrentPath(data.current_path || "");
+        const current = data.current_path || "";
+        setCurrentPath(current);
         setParentPath(data.parent_path || null);
         setEntries(data.entries || []);
         if (data.disk_space) {
           setDiskSpace(data.disk_space);
         }
+
+        // Initialize / reset root column
+        setColumnHistory([
+          {
+            path: current,
+            title: current.split("/").filter(Boolean).pop() || "Root",
+            entries: data.entries || [],
+            selectedPath: null,
+          },
+        ]);
+        setQuickLookFile(null);
       }
     } catch (e) {
       console.error("Browse failed:", e);
@@ -92,8 +149,249 @@ export default function FilesPage() {
   };
 
   useEffect(() => {
+    const saved = localStorage.getItem("kvtidal_files_view_mode");
+    if (saved === "list" || saved === "columns") {
+      setViewMode(saved);
+    }
     loadDirectory();
   }, []);
+
+  // Keyboard navigation for Column View
+  useEffect(() => {
+    if (viewMode !== "columns") return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName)) return;
+
+      if (e.key === " " && quickLookFile) {
+        e.preventDefault();
+        handlePlayDirect(quickLookFile);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [viewMode, quickLookFile]);
+
+  // Handle clicking items in Miller Column View
+  const handleColumnItemClick = async (colIdx: number, item: FsEntry) => {
+    if (item.is_dir) {
+      setQuickLookFile(null);
+      const updatedHistory = columnHistory.slice(0, colIdx + 1);
+      updatedHistory[colIdx] = {
+        ...updatedHistory[colIdx],
+        selectedPath: item.path,
+      };
+
+      const newCol: ColumnItem = {
+        path: item.path,
+        title: item.name,
+        entries: [],
+        selectedPath: null,
+        loading: true,
+      };
+      setColumnHistory([...updatedHistory, newCol]);
+      setCurrentPath(item.path);
+
+      try {
+        const resp = await fetch(`/api/fs/browse?path=${encodeURIComponent(item.path)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          setColumnHistory((prev) => {
+            const next = [...prev];
+            if (next[colIdx + 1] && next[colIdx + 1].path === item.path) {
+              next[colIdx + 1] = {
+                ...next[colIdx + 1],
+                entries: data.entries || [],
+                loading: false,
+              };
+            }
+            return next;
+          });
+          setTimeout(() => {
+            if (columnsContainerRef.current) {
+              columnsContainerRef.current.scrollTo({
+                left: columnsContainerRef.current.scrollWidth,
+                behavior: "smooth",
+              });
+            }
+          }, 60);
+        }
+      } catch (e) {
+        console.error("Error loading column:", e);
+      }
+    } else {
+      const isImg =
+        item.name.toLowerCase().endsWith(".jpg") ||
+        item.name.toLowerCase().endsWith(".jpeg") ||
+        item.name.toLowerCase().endsWith(".png");
+      if (isImg) {
+        setZoomCoverUrl(`/api/fs/download?path=${encodeURIComponent(item.path)}`);
+      }
+      const updatedHistory = columnHistory.slice(0, colIdx + 1);
+      updatedHistory[colIdx] = {
+        ...updatedHistory[colIdx],
+        selectedPath: item.path,
+      };
+      setColumnHistory(updatedHistory);
+      if (item.format) {
+        setQuickLookFile(item);
+      }
+      setTimeout(() => {
+        if (columnsContainerRef.current) {
+          columnsContainerRef.current.scrollTo({
+            left: columnsContainerRef.current.scrollWidth,
+            behavior: "smooth",
+          });
+        }
+      }, 60);
+    }
+  };
+
+  // Tag Editor Handlers
+  const openTagEditor = (entry: FsEntry) => {
+    setTagEditFile(entry);
+    setTagForm({
+      title: entry.title || entry.name.replace(/\.[^/.]+$/, ""),
+      artist: entry.artist || "",
+      album: entry.album || "",
+      year: "",
+      track_number: entry.track_number ? String(entry.track_number) : "",
+    });
+  };
+
+  const handleSaveTags = async () => {
+    if (!tagEditFile) return;
+    setIsSavingTags(true);
+    try {
+      const payload = {
+        file_path: tagEditFile.path,
+        title: tagForm.title.trim() || undefined,
+        artist: tagForm.artist.trim() || undefined,
+        album: tagForm.album.trim() || undefined,
+        year: tagForm.year ? parseInt(tagForm.year) : undefined,
+        track_number: tagForm.track_number ? parseInt(tagForm.track_number) : undefined,
+      };
+      const resp = await fetch("/api/fs/tags", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        showNotification(`Tags updated for "${data.track.title}"!`);
+        // Update columnHistory and entries
+        setColumnHistory((prev) =>
+          prev.map((col) => ({
+            ...col,
+            entries: col.entries.map((e) =>
+              e.path === tagEditFile.path
+                ? {
+                    ...e,
+                    title: data.track.title,
+                    artist: data.track.artist,
+                    album: data.track.album,
+                    track_number: data.track.track_number,
+                  }
+                : e
+            ),
+          }))
+        );
+        setEntries((prev) =>
+          prev.map((e) =>
+            e.path === tagEditFile.path
+              ? {
+                  ...e,
+                  title: data.track.title,
+                  artist: data.track.artist,
+                  album: data.track.album,
+                  track_number: data.track.track_number,
+                }
+              : e
+          )
+        );
+        if (quickLookFile && quickLookFile.path === tagEditFile.path) {
+          setQuickLookFile((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  title: data.track.title,
+                  artist: data.track.artist,
+                  album: data.track.album,
+                  track_number: data.track.track_number,
+                }
+              : null
+          );
+        }
+        setTagEditFile(null);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        showNotification(`Failed to update tags: ${err.error || resp.statusText}`);
+      }
+    } catch (e: any) {
+      showNotification(`Error: ${e.message}`);
+    } finally {
+      setIsSavingTags(false);
+    }
+  };
+
+  // Auto-Organize Handlers
+  const handlePreviewOrganize = async () => {
+    setIsOrganizing(true);
+    try {
+      const resp = await fetch("/api/fs/organize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base_dir: currentPath || "/volume2/music",
+          pattern: organizePattern,
+          dry_run: true,
+          selected_paths: selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined,
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setOrganizeDryRunResults(data);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        showNotification(`Dry-run failed: ${err.error || resp.statusText}`);
+      }
+    } catch (e: any) {
+      showNotification(`Organize preview error: ${e.message}`);
+    } finally {
+      setIsOrganizing(false);
+    }
+  };
+
+  const handleApplyOrganize = async () => {
+    setIsOrganizing(true);
+    try {
+      const resp = await fetch("/api/fs/organize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base_dir: currentPath || "/volume2/music",
+          pattern: organizePattern,
+          dry_run: false,
+          selected_paths: selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined,
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        showNotification(`Successfully organized and moved ${data.moved_count} file(s)!`);
+        setOrganizeModalOpen(false);
+        setOrganizeDryRunResults(null);
+        loadDirectory(currentPath);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        showNotification(`Organize apply failed: ${err.error || resp.statusText}`);
+      }
+    } catch (e: any) {
+      showNotification(`Organize error: ${e.message}`);
+    } finally {
+      setIsOrganizing(false);
+    }
+  };
 
   const formatSize = (bytes: number) => {
     if (!bytes || bytes === 0) return "0 B";
@@ -174,7 +472,9 @@ export default function FilesPage() {
         title: entry.title || entry.name.replace(/\.[^/.]+$/, ""),
         artist: entry.artist || "Synology NAS Vault",
         album: entry.album || currentPath.split("/").pop() || "Lossless Storage",
-        streamUrl: `/api/fs/download?path=${encodeURIComponent(entry.path)}`,
+        streamUrl: `/api/stream?path=${encodeURIComponent(entry.path)}&title=${encodeURIComponent(
+          entry.title || entry.name
+        )}&artist=${encodeURIComponent(entry.artist || "Synology NAS Vault")}`,
         format: entry.format || "FLAC",
         bitDepth: entry.bit_depth || 24,
         sampleRate: entry.sample_rate || 96000,
@@ -183,6 +483,7 @@ export default function FilesPage() {
         drScore: entry.dr_score || 13,
         isDsd: entry.format?.toLowerCase() === "dsf" || entry.format?.toLowerCase() === "dff",
         duration: entry.duration,
+        coverUrl: entry.cover_url || `/api/fs/cover?path=${encodeURIComponent(entry.path)}`,
       }));
   };
 
@@ -213,7 +514,10 @@ export default function FilesPage() {
       title: entry.title || entry.name.replace(/\.[^/.]+$/, ""),
       artist: entry.artist || "Synology NAS Vault",
       album: entry.album || currentPath.split("/").pop() || "Lossless Storage",
-      streamUrl: `/api/fs/download?path=${encodeURIComponent(entry.path)}`,
+      streamUrl: `/api/stream?path=${encodeURIComponent(entry.path)}&title=${encodeURIComponent(
+        entry.title || entry.name
+      )}&artist=${encodeURIComponent(entry.artist || "Synology NAS Vault")}`,
+      coverUrl: entry.cover_url || `/api/fs/cover?path=${encodeURIComponent(entry.path)}`,
       format: entry.format,
       bitDepth: entry.bit_depth || 24,
       sampleRate: entry.sample_rate || 96000,
@@ -605,10 +909,53 @@ export default function FilesPage() {
             )}
             <span>{isScanning ? "Scanning..." : "Scan to Library"}</span>
           </button>
+
+          {/* Auto-Organize Files */}
+          <button
+            onClick={() => setOrganizeModalOpen(true)}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-purple-300 hover:text-purple-200 border border-purple-500/30 text-xs font-medium transition-colors cursor-pointer"
+            title="Auto-organize files by metadata tags"
+          >
+            <FolderTree className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Auto-Organize</span>
+          </button>
         </div>
 
-        {/* Right: Search Filter & Refresh */}
+        {/* Center/Right: View Switcher + Search Filter & Refresh */}
         <div className="flex items-center space-x-2 w-full sm:w-auto">
+          {/* View Mode Switcher (Columns vs List) */}
+          <div className="flex items-center bg-card border border-border rounded-lg p-0.5 text-xs">
+            <button
+              onClick={() => {
+                setViewMode("columns");
+                localStorage.setItem("kvtidal_files_view_mode", "columns");
+              }}
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                viewMode === "columns"
+                  ? "bg-primary text-black font-bold shadow-sm"
+                  : "text-textSecondary hover:text-white"
+              }`}
+              title="macOS Finder Column View (Miller Columns)"
+            >
+              <Columns className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Columns</span>
+            </button>
+            <button
+              onClick={() => {
+                setViewMode("list");
+                localStorage.setItem("kvtidal_files_view_mode", "list");
+              }}
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                viewMode === "list"
+                  ? "bg-primary text-black font-bold shadow-sm"
+                  : "text-textSecondary hover:text-white"
+              }`}
+              title="Classic Table List View"
+            >
+              <LayoutList className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">List</span>
+            </button>
+          </div>
           <div className="relative flex-1 sm:w-56">
             <Search className="w-3.5 h-3.5 text-textSecondary absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
@@ -675,8 +1022,370 @@ export default function FilesPage() {
         ))}
       </div>
 
-      {/* Entries List Table */}
-      <div className="bg-surface border border-border rounded-xl overflow-hidden shadow-lg">
+      {viewMode === "columns" ? (
+        /* macOS Finder / Path Finder Miller Columns Browser */
+        <div
+          ref={columnsContainerRef}
+          className="flex-1 min-h-[620px] flex overflow-x-auto border border-border rounded-xl bg-surface shadow-2xl scrollbar-thin divide-x divide-border/70 select-none"
+        >
+          {columnHistory.map((col, colIdx) => (
+            <div
+              key={col.path + colIdx}
+              className="w-72 flex-shrink-0 flex flex-col h-[650px] bg-card/10 overflow-hidden"
+            >
+              {/* Column Header */}
+              <div className="p-2.5 border-b border-border/70 bg-card/50 flex items-center justify-between text-xs font-mono">
+                <div className="flex items-center space-x-1.5 truncate max-w-[190px]">
+                  <Folder className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
+                  <span className="font-bold text-textPrimary truncate" title={col.title}>
+                    {col.title}
+                  </span>
+                </div>
+                <span className="text-[10px] text-textSecondary px-1.5 py-0.5 rounded bg-card border border-border">
+                  {col.entries.length}
+                </span>
+              </div>
+
+              {/* Column Entries List */}
+              <div className="flex-1 overflow-y-auto p-1 space-y-0.5 scrollbar-thin">
+                {col.loading ? (
+                  <div className="p-8 text-center text-textSecondary text-xs flex flex-col items-center justify-center space-y-2">
+                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                    <span>Reading folder...</span>
+                  </div>
+                ) : col.entries.length === 0 ? (
+                  <div className="p-8 text-center text-textSecondary text-xs">Directory is empty</div>
+                ) : (
+                  col.entries
+                    .filter((item) => {
+                      if (!searchQuery.trim()) return true;
+                      const q = searchQuery.toLowerCase();
+                      return (
+                        item.name.toLowerCase().includes(q) ||
+                        (item.title && item.title.toLowerCase().includes(q)) ||
+                        (item.artist && item.artist.toLowerCase().includes(q))
+                      );
+                    })
+                    .map((item) => {
+                      const isSelected = col.selectedPath === item.path;
+                      const isAudio = !item.is_dir && item.format;
+                      return (
+                        <div
+                          key={item.path}
+                          onClick={() => handleColumnItemClick(colIdx, item)}
+                          className={`group flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer transition-all ${
+                            isSelected
+                              ? "bg-primary text-black font-semibold shadow-sm"
+                              : "text-textPrimary hover:bg-card hover:text-white"
+                          }`}
+                        >
+                          <div className="flex items-center space-x-2 truncate min-w-0">
+                            {item.is_dir ? (
+                              <Folder
+                                className={`w-4 h-4 flex-shrink-0 ${
+                                  isSelected ? "text-black fill-current" : "text-sky-400"
+                                }`}
+                              />
+                            ) : isAudio ? (
+                              <FileAudio
+                                className={`w-4 h-4 flex-shrink-0 ${
+                                  isSelected ? "text-black fill-current" : "text-emerald-400"
+                                }`}
+                              />
+                            ) : item.name.toLowerCase().endsWith(".jpg") ||
+                              item.name.toLowerCase().endsWith(".jpeg") ||
+                              item.name.toLowerCase().endsWith(".png") ? (
+                              <ImageIcon
+                                className={`w-4 h-4 flex-shrink-0 ${
+                                  isSelected ? "text-black fill-current" : "text-amber-400"
+                                }`}
+                              />
+                            ) : (
+                              <File className="w-4 h-4 flex-shrink-0 text-textSecondary" />
+                            )}
+                            <div className="truncate min-w-0">
+                              <div className="truncate font-mono leading-tight" title={item.name}>
+                                {item.title || item.name}
+                              </div>
+                              {isAudio && (
+                                <div
+                                  className={`text-[10px] truncate ${
+                                    isSelected ? "text-black/80 font-normal" : "text-textSecondary"
+                                  }`}
+                                >
+                                  {item.artist ? `${item.artist} • ` : ""}
+                                  {formatSize(item.size_bytes)}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center space-x-1 flex-shrink-0 ml-2">
+                            {item.is_dir ? (
+                              <ChevronRight
+                                className={`w-3.5 h-3.5 ${
+                                  isSelected ? "text-black" : "text-textSecondary group-hover:text-white"
+                                }`}
+                              />
+                            ) : isAudio && item.dr_score ? (
+                              <span
+                                className={`text-[9px] font-mono px-1 py-0.2 rounded font-bold ${
+                                  isSelected
+                                    ? "bg-black text-emerald-400"
+                                    : "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+                                }`}
+                              >
+                                DR{item.dr_score}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })
+                )}
+              </div>
+            </div>
+          ))}
+
+          {/* QuickLook Audio Inspector Pane */}
+          {quickLookFile && (
+            <div className="w-80 flex-shrink-0 flex flex-col h-[650px] bg-card/60 border-l border-primary/20 p-5 overflow-y-auto space-y-4 animate-in fade-in duration-200 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-border/60 pb-3">
+                <div className="flex items-center space-x-2">
+                  <Disc className="w-4 h-4 text-primary animate-spin" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-textSecondary">
+                    Audio QuickLook
+                  </span>
+                </div>
+                <button
+                  onClick={() => setQuickLookFile(null)}
+                  className="p-1 rounded-md hover:bg-card text-textSecondary hover:text-white cursor-pointer"
+                  title="Close Inspector"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Large Vinyl Artwork Preview with Real Cover & Lightbox */}
+              <div
+                onClick={() => setZoomCoverUrl(`/api/fs/cover?path=${encodeURIComponent(quickLookFile.path)}`)}
+                className="relative w-full aspect-square rounded-2xl bg-black border border-primary/30 overflow-hidden group shadow-xl cursor-zoom-in flex items-center justify-center"
+                title="Click to view full resolution cover"
+              >
+                {/* Real album cover from disk / embedded tags */}
+                <img
+                  src={`/api/fs/cover?path=${encodeURIComponent(quickLookFile.path)}`}
+                  alt={quickLookFile.title || quickLookFile.name}
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = "none";
+                    const fb = document.getElementById("quicklook-vinyl-fallback");
+                    if (fb) fb.style.display = "flex";
+                  }}
+                />
+
+                {/* Stylized Vinyl Fallback */}
+                <div
+                  id="quicklook-vinyl-fallback"
+                  style={{ display: "none" }}
+                  className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-primary/20 via-card to-emerald-900/20"
+                >
+                  <div className="w-24 h-24 rounded-full border-4 border-dashed border-primary/40 flex items-center justify-center bg-black/40 shadow-inner group-hover:scale-105 transition-transform duration-300">
+                    <Music className="w-10 h-10 text-primary" />
+                  </div>
+                </div>
+
+                {/* Overlaid Badges */}
+                <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-black/80 backdrop-blur-md border border-white/20 text-[10px] text-white font-mono shadow-md">
+                    <ZoomIn className="w-3 h-3 text-primary" />
+                    <span>Zoom</span>
+                  </span>
+                </div>
+
+                <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+                  <span className="px-2.5 py-1 rounded-lg bg-black/80 backdrop-blur-md border border-primary/30 text-[10px] font-mono font-bold text-emerald-400">
+                    {quickLookFile.format || "FLAC"} • {quickLookFile.bit_depth || 16}b/
+                    {(quickLookFile.sample_rate || 44100) >= 1000000
+                      ? `${((quickLookFile.sample_rate || 2822400) / 1000000).toFixed(2)}MHz`
+                      : `${((quickLookFile.sample_rate || 44100) / 1000).toFixed(1)}kHz`}
+                  </span>
+                  {quickLookFile.hires && (
+                    <span className="px-2 py-0.5 rounded-md bg-amber-500/30 border border-amber-500/40 text-[9px] font-bold text-amber-300">
+                      HI-RES
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Track Info */}
+              <div className="space-y-1">
+                <h3
+                  className="text-base font-bold text-white leading-tight truncate"
+                  title={quickLookFile.title || quickLookFile.name}
+                >
+                  {quickLookFile.title || quickLookFile.name.replace(/\.[^/.]+$/, "")}
+                </h3>
+                <p className="text-xs text-primary font-semibold truncate">
+                  {quickLookFile.artist || "Unknown Artist"}
+                </p>
+                <p className="text-xs text-textSecondary truncate">
+                  {quickLookFile.album || "Unknown Album"}
+                </p>
+              </div>
+
+              {/* Audiophile Dynamic Range Rating */}
+              <div className="p-3 rounded-xl bg-card border border-border space-y-1.5">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-textSecondary font-mono">Dynamic Range (DR):</span>
+                  <span
+                    className={`font-bold font-mono px-2 py-0.5 rounded text-[11px] ${
+                      (quickLookFile.dr_score || 12) >= 12
+                        ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+                        : (quickLookFile.dr_score || 12) >= 9
+                        ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                        : "bg-red-500/20 text-red-400 border border-red-500/40"
+                    }`}
+                  >
+                    DR{quickLookFile.dr_score || 12}
+                  </span>
+                </div>
+                <div className="w-full bg-black/40 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${
+                      (quickLookFile.dr_score || 12) >= 12
+                        ? "bg-emerald-400"
+                        : (quickLookFile.dr_score || 12) >= 9
+                        ? "bg-amber-400"
+                        : "bg-red-400"
+                    }`}
+                    style={{ width: `${Math.min(100, ((quickLookFile.dr_score || 12) / 20) * 100)}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Technical Specs Grid (6 Audiophile Dimensions) */}
+              <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                <div className="p-2 rounded-lg bg-card/60 border border-border">
+                  <div className="text-textSecondary text-[10px]">Format & Codec</div>
+                  <div className="text-white font-semibold">{quickLookFile.format || "WAV"} ({quickLookFile.bit_depth || 16}-Bit)</div>
+                </div>
+                <div className="p-2 rounded-lg bg-card/60 border border-border">
+                  <div className="text-textSecondary text-[10px]">Sample Rate</div>
+                  <div className="text-white font-semibold">
+                    {(quickLookFile.sample_rate || 44100) >= 1000000
+                      ? `${((quickLookFile.sample_rate || 2822400) / 1000000).toFixed(2)} MHz`
+                      : `${((quickLookFile.sample_rate || 44100) / 1000).toFixed(1)} kHz`}
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-card/60 border border-border">
+                  <div className="text-textSecondary text-[10px]">Duration</div>
+                  <div className="text-white font-semibold">{formatDuration(quickLookFile.duration)}</div>
+                </div>
+                <div className="p-2 rounded-lg bg-card/60 border border-border">
+                  <div className="text-textSecondary text-[10px]">File Size</div>
+                  <div className="text-white font-semibold">{formatSize(quickLookFile.size_bytes)}</div>
+                </div>
+                <div className="p-2 rounded-lg bg-card/60 border border-border">
+                  <div className="text-textSecondary text-[10px]">Channels</div>
+                  <div className="text-white font-semibold">{quickLookFile.channels || 2} ch (Stereo)</div>
+                </div>
+                <div className="p-2 rounded-lg bg-card/60 border border-border">
+                  <div className="text-textSecondary text-[10px]">Track #</div>
+                  <div className="text-white font-semibold">#{quickLookFile.track_number || 1}</div>
+                </div>
+              </div>
+
+              {/* Physical File Path with 1-Click Copy */}
+              <div className="p-2.5 rounded-xl bg-card border border-border/80 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-mono text-textSecondary tracking-wider">Physical Path</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(quickLookFile.path);
+                      setPathCopied(true);
+                      setTimeout(() => setPathCopied(false), 2000);
+                      showNotification("Path copied to clipboard");
+                    }}
+                    className="text-[10px] font-mono text-primary hover:underline flex items-center space-x-1 cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>{pathCopied ? "Copied!" : "Copy"}</span>
+                  </button>
+                </div>
+                <div className="text-[11px] font-mono text-textSecondary break-all select-all leading-tight bg-black/40 p-2 rounded-lg border border-border/40">
+                  {quickLookFile.path}
+                </div>
+              </div>
+
+              {/* Quick Action Buttons */}
+              <div className="space-y-2 pt-2">
+                <button
+                  onClick={() => handlePlayDirect(quickLookFile)}
+                  className="w-full flex items-center justify-center space-x-2 py-2.5 rounded-xl bg-primary text-black font-bold text-xs shadow-lg hover:bg-primary/90 transition-colors cursor-pointer"
+                >
+                  <Play className="w-4 h-4 fill-current" />
+                  <span>Play Bit-Perfect</span>
+                </button>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => {
+                      const track = getAudioTracks([quickLookFile]);
+                      if (track.length > 0) addAllToQueue(track);
+                      showNotification("Added track to queue");
+                    }}
+                    className="flex items-center justify-center space-x-1.5 py-2 rounded-lg bg-card hover:bg-cardHover border border-border text-xs font-medium text-textPrimary transition-colors cursor-pointer"
+                  >
+                    <ListPlus className="w-3.5 h-3.5" />
+                    <span>Queue</span>
+                  </button>
+
+                  <a
+                    href={`/api/fs/download?path=${encodeURIComponent(quickLookFile.path)}`}
+                    download
+                    className="flex items-center justify-center space-x-1.5 py-2 rounded-lg bg-card hover:bg-cardHover border border-border text-xs font-medium text-textPrimary transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-primary" />
+                    <span>Download</span>
+                  </a>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => openTagEditor(quickLookFile)}
+                    className="flex items-center justify-center space-x-1.5 py-2 rounded-lg bg-card hover:bg-cardHover border border-border text-xs font-medium text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    <span>Edit Tags</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setSelectedPaths(new Set([quickLookFile.path]));
+                      setOrganizeModalOpen(true);
+                    }}
+                    className="flex items-center justify-center space-x-1.5 py-2 rounded-lg bg-card hover:bg-cardHover border border-border text-xs font-medium text-purple-400 hover:text-purple-300 transition-colors cursor-pointer"
+                  >
+                    <FolderTree className="w-3.5 h-3.5" />
+                    <span>Organize</span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setInspectEntry(quickLookFile)}
+                  className="w-full flex items-center justify-center space-x-1.5 py-1.5 text-[11px] font-mono text-textSecondary hover:text-primary transition-colors cursor-pointer"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Inspect Technical Vorbis Headers</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Entries List Table */
+        <div className="bg-surface border border-border rounded-xl overflow-hidden shadow-lg">
         {/* Table Header */}
         <div className="p-3 border-b border-border bg-card/40 text-xs font-semibold text-textSecondary uppercase tracking-wider flex items-center justify-between">
           <div className="flex items-center space-x-3 flex-1 min-w-0">
@@ -944,6 +1653,7 @@ export default function FilesPage() {
           </div>
         )}
       </div>
+    )}
 
       {/* Floating Multi-Select Action Bar */}
       {selectedPaths.size > 0 && (
@@ -1275,6 +1985,263 @@ export default function FilesPage() {
               >
                 Execute Transfer
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Audio Metadata Tag Editor Modal */}
+      {tagEditFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150">
+          <div className="bg-surface border border-primary/40 rounded-2xl w-full max-w-md shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center space-x-2">
+                <Pencil className="w-4 h-4 text-primary" />
+                <h3 className="text-base font-bold text-textPrimary">Edit Audio Metadata Tags</h3>
+              </div>
+              <button
+                onClick={() => setTagEditFile(null)}
+                className="p-1 rounded text-textSecondary hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-textSecondary block mb-1 font-mono">Title</label>
+                <input
+                  type="text"
+                  value={tagForm.title}
+                  onChange={(e) => setTagForm({ ...tagForm, title: e.target.value })}
+                  className="w-full bg-card border border-border rounded-xl p-2.5 text-textPrimary font-mono focus:outline-none focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="text-textSecondary block mb-1 font-mono">Artist</label>
+                <input
+                  type="text"
+                  value={tagForm.artist}
+                  onChange={(e) => setTagForm({ ...tagForm, artist: e.target.value })}
+                  className="w-full bg-card border border-border rounded-xl p-2.5 text-textPrimary font-mono focus:outline-none focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="text-textSecondary block mb-1 font-mono">Album</label>
+                <input
+                  type="text"
+                  value={tagForm.album}
+                  onChange={(e) => setTagForm({ ...tagForm, album: e.target.value })}
+                  className="w-full bg-card border border-border rounded-xl p-2.5 text-textPrimary font-mono focus:outline-none focus:border-primary"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-textSecondary block mb-1 font-mono">Year</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 2024"
+                    value={tagForm.year}
+                    onChange={(e) => setTagForm({ ...tagForm, year: e.target.value })}
+                    className="w-full bg-card border border-border rounded-xl p-2.5 text-textPrimary font-mono focus:outline-none focus:border-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-textSecondary block mb-1 font-mono">Track #</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 1"
+                    value={tagForm.track_number}
+                    onChange={(e) => setTagForm({ ...tagForm, track_number: e.target.value })}
+                    className="w-full bg-card border border-border rounded-xl p-2.5 text-textPrimary font-mono focus:outline-none focus:border-primary"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
+              <button
+                onClick={() => setTagEditFile(null)}
+                className="px-4 py-2 rounded-xl text-xs text-textSecondary hover:text-white cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveTags}
+                disabled={isSavingTags}
+                className="px-4 py-2 rounded-xl bg-primary text-black font-bold text-xs shadow-md disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+              >
+                {isSavingTags && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isSavingTags ? "Writing to Disk..." : "Save Tags"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Smart Audiophile Auto-Organize Modal */}
+      {organizeModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150">
+          <div className="bg-surface border border-purple-500/40 rounded-2xl w-full max-w-2xl shadow-2xl p-6 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-border pb-3 flex-shrink-0">
+              <div className="flex items-center space-x-2">
+                <FolderTree className="w-5 h-5 text-purple-400" />
+                <h3 className="text-base font-bold text-textPrimary">Smart Audiophile Library Organizer</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setOrganizeModalOpen(false);
+                  setOrganizeDryRunResults(null);
+                }}
+                className="p-1 rounded text-textSecondary hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs overflow-y-auto pr-1">
+              <p className="text-textSecondary">
+                Automatically organize audio files into structured folders based on their internal metadata tags.
+              </p>
+
+              <div>
+                <label className="text-textSecondary block mb-1 font-mono">Naming Pattern Template</label>
+                <input
+                  type="text"
+                  value={organizePattern}
+                  onChange={(e) => setOrganizePattern(e.target.value)}
+                  className="w-full bg-card border border-border rounded-xl p-2.5 text-textPrimary font-mono focus:outline-none focus:border-purple-400"
+                />
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setOrganizePattern("{artist}/{album}/{track:02d} - {title}.{ext}")}
+                    className="px-2 py-1 rounded bg-card hover:bg-cardHover border border-border text-[11px] font-mono text-purple-300 cursor-pointer"
+                  >
+                    Artist / Album / Track - Title
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrganizePattern("{artist}/{album} ({year})/{track:02d} - {title}.{ext}")}
+                    className="px-2 py-1 rounded bg-card hover:bg-cardHover border border-border text-[11px] font-mono text-purple-300 cursor-pointer"
+                  >
+                    Artist / Album (Year) / Track - Title
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrganizePattern("{artist} - {album}/{track:02d}. {title}.{ext}")}
+                    className="px-2 py-1 rounded bg-card hover:bg-cardHover border border-border text-[11px] font-mono text-purple-300 cursor-pointer"
+                  >
+                    Artist - Album / Track. Title
+                  </button>
+                </div>
+              </div>
+
+              {/* Dry-run preview table */}
+              {organizeDryRunResults && (
+                <div className="space-y-2 pt-2">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-white">
+                      Proposed Moves: {organizeDryRunResults.proposed_moves_count} of{" "}
+                      {organizeDryRunResults.total_candidates} files
+                    </span>
+                  </div>
+                  {organizeDryRunResults.proposed_moves_count === 0 ? (
+                    <div className="p-4 text-center rounded-xl bg-black/40 border border-border text-emerald-400 font-mono">
+                      All files are already organized according to this pattern!
+                    </div>
+                  ) : (
+                    <div className="max-h-60 overflow-y-auto space-y-1.5 bg-black/40 p-3 rounded-xl border border-border font-mono text-[11px]">
+                      {organizeDryRunResults.proposed_moves.map((m: any, idx: number) => (
+                        <div key={idx} className="p-2 rounded bg-card/60 border border-border/40 space-y-1">
+                          <div className="text-textSecondary truncate">From: {m.source_path}</div>
+                          <div className="text-emerald-400 font-semibold truncate">To: {m.destination_path}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-border flex-shrink-0">
+              <button
+                onClick={handlePreviewOrganize}
+                disabled={isOrganizing}
+                className="px-4 py-2 rounded-xl bg-card hover:bg-cardHover text-purple-300 border border-purple-500/30 font-semibold text-xs cursor-pointer flex items-center space-x-1.5"
+              >
+                {isOrganizing && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Preview Moves (Dry Run)</span>
+              </button>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => {
+                    setOrganizeModalOpen(false);
+                    setOrganizeDryRunResults(null);
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs text-textSecondary hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleApplyOrganize}
+                  disabled={
+                    isOrganizing ||
+                    !organizeDryRunResults ||
+                    organizeDryRunResults.proposed_moves_count === 0
+                  }
+                  className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md disabled:opacity-40 cursor-pointer flex items-center space-x-1.5"
+                >
+                  {isOrganizing && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Apply & Move Files</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full Cover Lightbox Modal */}
+      {zoomCoverUrl && (
+        <div
+          onClick={() => setZoomCoverUrl(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-200 cursor-zoom-out"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-2xl w-full bg-card border border-border/80 rounded-2xl overflow-hidden shadow-2xl p-4 flex flex-col items-center space-y-3 cursor-default"
+          >
+            <div className="w-full flex justify-between items-center pb-2 border-b border-border/60">
+              <div className="flex items-center space-x-2 text-xs font-mono text-textSecondary">
+                <ImageIcon className="w-4 h-4 text-primary" />
+                <span>High-Resolution Album Artwork</span>
+              </div>
+              <button
+                onClick={() => setZoomCoverUrl(null)}
+                className="p-1 rounded-md text-textSecondary hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="w-full max-h-[70vh] flex items-center justify-center overflow-hidden rounded-xl bg-black/60">
+              <img
+                src={zoomCoverUrl}
+                alt="Album Art Zoom"
+                className="max-h-[70vh] max-w-full object-contain rounded-lg shadow-2xl"
+              />
+            </div>
+            <div className="flex items-center justify-between w-full pt-1 text-[11px] text-textSecondary font-mono">
+              <span>Click outside to close</span>
+              <a
+                href={zoomCoverUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline flex items-center space-x-1"
+              >
+                <span>Open raw image</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
             </div>
           </div>
         </div>
