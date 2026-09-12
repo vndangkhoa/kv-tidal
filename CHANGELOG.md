@@ -4,6 +4,13 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-21] - 2026-09-13
+
+### Added & Improved
+- **Top-Right Corner Live Progress HUD**: Dynamically maps active Soulseek P2P downloads to the top-right header button with an animated circular radial progress ring, real-time download percentage (e.g. `45%`), and live transfer speed (e.g. `2.4 MB/s`).
+- **Unified Soulseek P2P Telemetry**: Soulseek transfers occurring in `slskd` are seamlessly merged into the KV-Tidal download queue via `GET /api/download/queue` with accurate byte progress, transfer speeds, and ETA calculations.
+- **Enhanced Download Drawer Badges**: Active and queued downloads clearly indicate source (`Soulseek P2P Lossless FLAC` vs `Tidal HiFi Direct`), providing transparent audiophile provenance for every downloaded track.
+
 ## [1.0.0-20] - 2026-09-13
 
 ### Added & Changed

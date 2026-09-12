@@ -359,6 +359,110 @@ impl SoulseekEngine {
 
         Err(format!("Transfer for '{}' not found in slskd queue", filename))
     }
+
+    /// Retrieve all active downloads from slskd
+    pub async fn get_active_downloads(&self) -> Result<Vec<SoulseekDownloadStatus>, String> {
+        let (base_url, api_key, enabled) = {
+            let cfg = self.config.read().await;
+            (cfg.soulseek_url.clone(), cfg.soulseek_api_key.clone(), cfg.soulseek_enabled)
+        };
+
+        if !enabled {
+            return Ok(Vec::new());
+        }
+
+        let endpoint = format!("{}/api/v0/transfers/downloads", base_url.trim_end_matches('/'));
+        let headers = self.build_headers(api_key.as_deref());
+
+        let resp = self
+            .client
+            .get(&endpoint)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to poll slskd downloads: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Ok(Vec::new());
+        }
+
+        let json: serde_json::Value = resp.json().await.unwrap_or_default();
+        let mut list = Vec::new();
+        collect_transfers_from_json(&json, &mut list);
+        Ok(list)
+    }
+}
+
+/// Recursively collect all file transfers from slskd JSON structure
+fn collect_transfers_from_json(v: &serde_json::Value, out: &mut Vec<SoulseekDownloadStatus>) {
+    match v {
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_transfers_from_json(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(fname_val) = map.get("filename").and_then(|f| f.as_str()) {
+                let size = map.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                let bytes_transferred = map
+                    .get("bytesTransferred")
+                    .or_else(|| map.get("bytes_transferred"))
+                    .and_then(|b| b.as_u64())
+                    .unwrap_or(0);
+                let speed = map
+                    .get("averageSpeed")
+                    .or_else(|| map.get("speed"))
+                    .and_then(|s| s.as_u64().or_else(|| s.as_f64().map(|f| f as u64)))
+                    .unwrap_or(0);
+                let percent = if size > 0 && bytes_transferred > 0 {
+                    ((bytes_transferred as f32 / size as f32) * 100.0).min(100.0)
+                } else {
+                    map.get("percentComplete")
+                        .or_else(|| map.get("percent"))
+                        .and_then(|p| p.as_f64().map(|f| {
+                            let f32_val = f as f32;
+                            if f32_val <= 1.0 && f32_val > 0.0 { f32_val * 100.0 } else { f32_val }
+                        }))
+                        .unwrap_or(0.0)
+                };
+                let state = map
+                    .get("state")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("Queued")
+                    .to_string();
+
+                let lower = state.to_lowercase();
+                let is_completed = lower.contains("completed") || lower.contains("succeeded") || lower.contains("finished");
+                let is_failed = lower.contains("error")
+                    || lower.contains("fail")
+                    || lower.contains("cancel")
+                    || lower.contains("abort")
+                    || lower.contains("timedout")
+                    || lower.contains("rejected");
+
+                out.push(SoulseekDownloadStatus {
+                    filename: fname_val.to_string(),
+                    size,
+                    bytes_transferred,
+                    speed_bytes: speed,
+                    percent_complete: percent,
+                    state: state.clone(),
+                    is_completed,
+                    is_failed,
+                    error: if is_failed {
+                        Some(format!("Soulseek transfer failed with state: {}", state))
+                    } else {
+                        None
+                    },
+                });
+            } else {
+                for (_, val) in map {
+                    collect_transfers_from_json(val, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Recursively search slskd transfer JSON hierarchy for matching file
@@ -397,17 +501,17 @@ fn find_transfer_in_json(v: &serde_json::Value, target_filename: &str) -> Option
                         .or_else(|| map.get("speed"))
                         .and_then(|s| s.as_u64().or_else(|| s.as_f64().map(|f| f as u64)))
                         .unwrap_or(0);
-                    let percent = map
-                        .get("percentComplete")
-                        .or_else(|| map.get("percent"))
-                        .and_then(|p| p.as_f64().map(|f| f as f32))
-                        .unwrap_or_else(|| {
-                            if size > 0 {
-                                ((bytes_transferred as f32 / size as f32) * 100.0).min(100.0)
-                            } else {
-                                0.0
-                            }
-                        });
+                    let percent = if size > 0 && bytes_transferred > 0 {
+                        ((bytes_transferred as f32 / size as f32) * 100.0).min(100.0)
+                    } else {
+                        map.get("percentComplete")
+                            .or_else(|| map.get("percent"))
+                            .and_then(|p| p.as_f64().map(|f| {
+                                let f32_val = f as f32;
+                                if f32_val <= 1.0 && f32_val > 0.0 { f32_val * 100.0 } else { f32_val }
+                            }))
+                            .unwrap_or(0.0)
+                    };
                     let state = map
                         .get("state")
                         .and_then(|s| s.as_str())

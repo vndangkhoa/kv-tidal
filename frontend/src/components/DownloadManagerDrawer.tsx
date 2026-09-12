@@ -42,7 +42,7 @@ function formatEta(seconds?: number): string {
   return `${m}m ${s}s left`;
 }
 
-function getStageBadge(stage: DownloadStage) {
+function getStageBadge(stage: DownloadStage, source?: string) {
   switch (stage) {
     case "queued":
       return (
@@ -55,14 +55,14 @@ function getStageBadge(stage: DownloadStage) {
       return (
         <span className="flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
           <Radio className="w-2.5 h-2.5 animate-pulse" />
-          <span>Resolving Stream</span>
+          <span>{source === "soulseek" ? "Searching Soulseek" : "Resolving Stream"}</span>
         </span>
       );
     case "downloading_audio":
       return (
-        <span className="flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+        <span className="flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-300 border border-cyan-500/40">
           <Loader2 className="w-2.5 h-2.5 animate-spin" />
-          <span>Downloading FLAC</span>
+          <span>{source === "soulseek" ? "Soulseek P2P FLAC" : "Lossless FLAC"}</span>
         </span>
       );
     case "tagging_and_writing":
@@ -270,11 +270,21 @@ function ActiveJobCard({
             <p className="text-[11px] text-textSecondary truncate mt-0.5">
               {job.artist} {job.album ? `• ${job.album}` : ""}
             </p>
+            {job.source === "soulseek" ? (
+              <span className="inline-flex items-center space-x-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/60 text-cyan-400 border border-cyan-800/50 mt-1">
+                <Radio className="w-2.5 h-2.5 animate-pulse" />
+                <span>Soulseek P2P Lossless FLAC</span>
+              </span>
+            ) : job.source === "tidal" ? (
+              <span className="inline-flex items-center space-x-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/50 mt-1">
+                <span>Tidal HiFi Direct</span>
+              </span>
+            ) : null}
           </div>
         </div>
 
         <div className="flex items-center space-x-2 flex-shrink-0">
-          {getStageBadge(job.stage)}
+          {getStageBadge(job.stage, job.source)}
           <button
             onClick={() => onCancel(job.id)}
             title="Cancel download"

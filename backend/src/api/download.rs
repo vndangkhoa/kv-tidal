@@ -212,6 +212,12 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
     if let Some(ref id) = payload.track_id {
         if let Ok(tidal_url) = state.tidal.resolve_stream_url(id, None).await {
             info!("Resolved direct Tidal HiFi stream URL for track download: {}", id);
+            {
+                let mut q = state.download_queue.write().await;
+                if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+                    job.source = Some("tidal".to_string());
+                }
+            }
             if let Ok(bytes) = fetch_audio_from_url_streaming(&tidal_url, &state, &job_id).await {
                 audio_bytes_opt = Some(bytes);
             }
@@ -220,6 +226,12 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
 
     // Priority 2: Pure Bit-Perfect Lossless Soulseek P2P Retrieval
     if audio_bytes_opt.is_none() {
+        {
+            let mut q = state.download_queue.write().await;
+            if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+                job.source = Some("soulseek".to_string());
+            }
+        }
         info!("Searching Soulseek network for authentic FLAC: {} - {}", payload.artist, payload.title);
         match state.soulseek.search_flac(&payload.artist, &payload.title).await {
             Ok(candidates) if !candidates.is_empty() => {
@@ -251,9 +263,9 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
 
                         match state.soulseek.poll_download_status(&candidate.username, &candidate.filename).await {
                             Ok(status) => {
-                                let mapped_pct = (10.0f32 + (status.percent_complete * 0.70f32)).min(80.0f32) as u8;
-                                let eta = if status.speed_bytes > 0 {
-                                    Some((status.size.saturating_sub(status.bytes_transferred)) / status.speed_bytes)
+                                let mapped_pct = (status.percent_complete.clamp(1.0, 100.0) as u8).min(95);
+                                let eta = if status.speed_bytes > 0 && status.size > status.bytes_transferred {
+                                    Some((status.size - status.bytes_transferred) / status.speed_bytes)
                                 } else {
                                     None
                                 };
@@ -528,9 +540,87 @@ async fn handle_download(
 async fn get_download_queue(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    let q = state.download_queue.read().await;
+    let mut jobs = {
+        let q = state.download_queue.read().await;
+        q.jobs.clone()
+    };
+
+    if let Ok(slsk_transfers) = state.soulseek.get_active_downloads().await {
+        for transfer in slsk_transfers {
+            let clean_name = transfer.filename.replace('\\', "/");
+            let file_name = std::path::Path::new(&clean_name)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&transfer.filename);
+
+            // Check if this transfer matches any existing job in queue
+            let already_present = jobs.iter().any(|j| {
+                clean_name.to_lowercase().contains(&j.title.to_lowercase())
+                    || file_name.to_lowercase().contains(&j.title.to_lowercase())
+                    || j.id.contains(&clean_name)
+            });
+
+            if !already_present && !transfer.is_completed {
+                let file_stem = std::path::Path::new(file_name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(file_name);
+
+                let (artist, title) = if let Some((a, t)) = file_stem.split_once(" - ") {
+                    (a.trim().to_string(), t.trim().to_string())
+                } else {
+                    ("Soulseek Peer".to_string(), file_stem.to_string())
+                };
+
+                let stage = if transfer.is_failed {
+                    DownloadStage::Failed
+                } else if transfer.bytes_transferred > 0 || transfer.state.to_lowercase().contains("downloading") {
+                    DownloadStage::DownloadingAudio
+                } else {
+                    DownloadStage::Queued
+                };
+
+                let speed_kbps = if transfer.speed_bytes > 0 {
+                    Some(transfer.speed_bytes / 1024)
+                } else {
+                    None
+                };
+
+                let eta = if transfer.speed_bytes > 0 && transfer.size > transfer.bytes_transferred {
+                    Some((transfer.size - transfer.bytes_transferred) / transfer.speed_bytes)
+                } else {
+                    None
+                };
+
+                let slsk_job = DownloadJob {
+                    id: format!("slsk-{:x}", md5::compute(clean_name.as_bytes())),
+                    title,
+                    artist,
+                    album: "Soulseek P2P Lossless".to_string(),
+                    track_number: None,
+                    year: None,
+                    cover_url: None,
+                    stream_url: None,
+                    track_id: None,
+                    source: Some("soulseek".to_string()),
+                    stage,
+                    progress_percent: transfer.percent_complete as u8,
+                    downloaded_bytes: transfer.bytes_transferred,
+                    total_bytes: if transfer.size > 0 { Some(transfer.size) } else { None },
+                    speed_kbps,
+                    eta_seconds: eta,
+                    error: transfer.error,
+                    saved_path: None,
+                    created_at: chrono::Utc::now().timestamp(),
+                    updated_at: chrono::Utc::now().timestamp(),
+                };
+                jobs.push(slsk_job);
+            }
+        }
+    }
+
     Json(serde_json::json!({
-        "jobs": q.jobs,
+        "jobs": jobs,
     }))
 }
 

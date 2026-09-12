@@ -169,27 +169,84 @@ export function Header() {
             <Sparkles className="w-3 h-3 text-primary animate-pulse ml-0.5" />
           </button>
 
-          {/* Synology NAS Download Manager Trigger */}
-          <button
-            onClick={() => setIsManagerOpen(true)}
-            title={
-              activeJobs.length > 0
-                ? `${activeJobs.length} active downloads to Synology NAS`
-                : "Open Synology NAS Download Pipeline"
-            }
-            className="relative p-2 rounded-full hover:bg-card text-textSecondary hover:text-white transition-colors cursor-pointer"
-          >
-            <Download
-              className={`w-4 h-4 ${
-                activeJobs.length > 0 ? "text-primary animate-pulse" : ""
-              }`}
-            />
-            {activeJobs.length > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-black shadow-[0_0_8px_rgba(0,255,255,0.6)]">
-                {activeJobs.length}
-              </span>
-            )}
-          </button>
+          {/* Synology NAS & Soulseek P2P Download Manager Trigger */}
+          {activeJobs.length > 0 ? (
+            (() => {
+              const primaryJob = activeJobs[0];
+              const pct = Math.min(100, Math.max(0, primaryJob.progress_percent));
+              const speedText = primaryJob.speed_kbps
+                ? primaryJob.speed_kbps >= 1024
+                  ? `${(primaryJob.speed_kbps / 1024).toFixed(1)} MB/s`
+                  : `${primaryJob.speed_kbps} KB/s`
+                : "";
+              const strokeCircumference = 2 * Math.PI * 9;
+              const strokeDashoffset = strokeCircumference - (strokeCircumference * pct) / 100;
+              const sourceLabel = primaryJob.source === "soulseek" ? "Soulseek P2P FLAC" : "Lossless FLAC";
+
+              return (
+                <button
+                  onClick={() => setIsManagerOpen(true)}
+                  title={`[${sourceLabel}] ${primaryJob.title} - ${primaryJob.artist} (${pct}%${speedText ? ` • ${speedText}` : ""}) — Click to view download queue`}
+                  className="flex items-center space-x-2 px-2.5 py-1 rounded-full bg-primary/10 hover:bg-primary/20 border border-primary/40 hover:border-primary text-white text-[11px] font-mono shadow-[0_0_12px_rgba(0,255,255,0.25)] transition-all cursor-pointer group"
+                >
+                  {/* Radial progress ring around download icon */}
+                  <div className="relative w-5 h-5 flex items-center justify-center flex-shrink-0">
+                    <svg className="w-5 h-5 -rotate-90" viewBox="0 0 24 24">
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="9"
+                        className="text-zinc-700/60"
+                        strokeWidth="2.5"
+                        stroke="currentColor"
+                        fill="transparent"
+                      />
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="9"
+                        className="text-primary transition-all duration-300"
+                        strokeWidth="2.5"
+                        strokeDasharray={strokeCircumference}
+                        strokeDashoffset={strokeDashoffset}
+                        strokeLinecap="round"
+                        stroke="currentColor"
+                        fill="transparent"
+                      />
+                    </svg>
+                    <Download className="w-2.5 h-2.5 text-primary absolute animate-pulse" />
+                  </div>
+
+                  {/* Percentage */}
+                  <span className="font-bold text-primary">
+                    {pct}%
+                  </span>
+
+                  {/* Live Speed */}
+                  {speedText && (
+                    <span className="text-textSecondary text-[10px] hidden sm:inline">
+                      • {speedText}
+                    </span>
+                  )}
+
+                  {/* Additional queue count badge */}
+                  {activeJobs.length > 1 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-primary text-black ml-0.5">
+                      +{activeJobs.length - 1}
+                    </span>
+                  )}
+                </button>
+              );
+            })()
+          ) : (
+            <button
+              onClick={() => setIsManagerOpen(true)}
+              title="Open Synology NAS Download Pipeline"
+              className="relative p-2 rounded-full hover:bg-card text-textSecondary hover:text-white transition-colors cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+          )}
 
           <Link
             href="/settings/"
