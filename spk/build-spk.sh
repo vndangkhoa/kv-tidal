@@ -4,30 +4,41 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "=== [1/4] Building Next.js Frontend ==="
-cd "$ROOT_DIR/frontend"
-npm run build
+PKG_NAME="kvtidal"
+VERSION="1.0.0-1"
+ARCH="x64"
+DSM_VER="7.2"
 
-echo "=== [2/4] Building Rust Backend (Release) ==="
-cd "$ROOT_DIR/backend"
-cargo build --release
-
-echo "=== [3/4] Assembling SPK Staging Payload ==="
+echo "=== [1/4] Preparing SPK Staging Payload ==="
 STAGE_DIR="$ROOT_DIR/build_spk"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/package/bin"
 mkdir -p "$STAGE_DIR/package/web"
 
-# Copy binary & frontend static files
-cp "$ROOT_DIR/backend/target/release/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
-chmod +x "$STAGE_DIR/package/bin/kv-tidal"
-cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
+# Prefer extracting GLIBC 2.36 compatible binary from docker image if available
+if docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then
+    echo "Using Debian Bookworm (GLIBC 2.36 compatible) binary & static web from docker image..."
+    CID=$(docker create vndangkhoa/kv-tidal:latest)
+    docker cp "$CID:/app/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
+    docker cp "$CID:/app/web/." "$STAGE_DIR/package/web/"
+    docker rm -f "$CID" >/dev/null
+else
+    echo "Docker image not found, building frontend & backend on host..."
+    cd "$ROOT_DIR/frontend"
+    npm run build
+    cd "$ROOT_DIR/backend"
+    cargo build --release
+    cp "$ROOT_DIR/backend/target/release/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
+    cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
+fi
 
-# Pack package.tgz
+chmod +x "$STAGE_DIR/package/bin/kv-tidal"
+
+echo "=== [2/4] Packaging package.tgz ==="
 cd "$STAGE_DIR/package"
 tar -czf "$STAGE_DIR/package.tgz" *
 
-# Copy Synology metadata, icons, and scripts
+echo "=== [3/4] Adding Metadata, Icons & Lifecycle Scripts ==="
 cd "$ROOT_DIR/spk"
 cp INFO "$STAGE_DIR/INFO"
 cp PACKAGE_ICON.PNG "$STAGE_DIR/PACKAGE_ICON.PNG"
@@ -36,19 +47,22 @@ cp -r conf "$STAGE_DIR/conf"
 cp -r scripts "$STAGE_DIR/scripts"
 cp -r WIZARD_UIFILES "$STAGE_DIR/WIZARD_UIFILES"
 
-echo "=== [4/4] Creating Final Synology SPK Archive ==="
+echo "=== [4/4] Assembling Final Synology SPK Archives ==="
 cd "$STAGE_DIR"
-SPK_OUTPUT="$ROOT_DIR/kv-tidal.spk"
-rm -f "$SPK_OUTPUT"
+mkdir -p "$ROOT_DIR/dist"
+SPK_DIST="$ROOT_DIR/dist/${PKG_NAME}_${ARCH}-${DSM_VER}_${VERSION}.spk"
+rm -f "$SPK_DIST" "$ROOT_DIR/kv-tidal.spk" "$ROOT_DIR/kvtidal.spk"
 
-# Create final SPK tar archive
-tar -cf "$SPK_OUTPUT" --format=gnu INFO conf scripts WIZARD_UIFILES PACKAGE_ICON.PNG PACKAGE_ICON_256.PNG package.tgz
+tar -cf "$SPK_DIST" --format=gnu INFO conf scripts WIZARD_UIFILES PACKAGE_ICON.PNG PACKAGE_ICON_256.PNG package.tgz
+cp "$SPK_DIST" "$ROOT_DIR/kv-tidal.spk"
+cp "$SPK_DIST" "$ROOT_DIR/kvtidal.spk"
 
 rm -rf "$STAGE_DIR"
 
 echo "=========================================================="
 echo " SUCCESS: Synology SPK package built at:"
-echo "   $SPK_OUTPUT"
-echo " Package Size: $(du -h "$SPK_OUTPUT" | cut -f1)"
-echo " Ready for Manual Install in Synology DSM Package Center!"
+echo "   $SPK_DIST"
+echo "   $ROOT_DIR/kv-tidal.spk"
+echo " Package Size: $(du -h "$SPK_DIST" | cut -f1)"
+echo " Ready for manual install or spkrepo publishing!"
 echo "=========================================================="

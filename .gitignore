@@ -33,3 +33,4 @@ server.log
 .idea/
 .vscode/
 *.swp
+dist/

@@ -17,6 +17,7 @@ server.log
 
 # Package staging
 build_spk/
+dist/
 *.spk
 
 # Git

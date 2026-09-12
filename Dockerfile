@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # =========================================================
 # Stage 1: Build Next.js 15 Static Frontend
 # =========================================================
@@ -7,8 +5,7 @@ FROM node:22-alpine AS frontend-builder
 WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci || npm install
+RUN npm ci || npm install
 
 COPY frontend/ ./
 RUN npm run build
@@ -19,18 +16,9 @@ RUN npm run build
 FROM rust:1-bookworm AS backend-builder
 WORKDIR /app/backend
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev libc6-dev && rm -rf /var/lib/apt/lists/*
-
 COPY backend/Cargo.toml backend/Cargo.lock ./
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/backend/target \
-    cargo fetch
-
 COPY backend/src ./src
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/backend/target \
-    cargo build --release && \
-    cp /app/backend/target/release/kv-tidal /app/kv-tidal
+RUN cargo build --release && cp /app/backend/target/release/kv-tidal /app/kv-tidal
 
 # =========================================================
 # Stage 3: Minimal Production Runtime
@@ -41,6 +29,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-builder /app/kv-tidal /app/kv-tidal
@@ -54,7 +43,7 @@ ENV HOST=0.0.0.0 \
     WEB_DIR=/app/web \
     MUSIC_DIR=/music
 
-RUN mkdir -p /data /music && chmod 777 /data /music
+RUN mkdir -p /data /music && chmod 777 /data /music && chmod +x /app/kv-tidal
 
 EXPOSE 8080
 
