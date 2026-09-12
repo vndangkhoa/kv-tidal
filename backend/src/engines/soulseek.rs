@@ -146,14 +146,20 @@ impl SoulseekEngine {
         info!("Initiated slskd search ID: {} for '{}'", search_id, search_text);
 
         // Poll search results for up to 6 seconds to gather high-quality responses
-        let poll_url = format!("{}/api/v0/searches/{}", base_url.trim_end_matches('/'), search_id);
+        let poll_url = format!("{}/api/v0/searches/{}/responses", base_url.trim_end_matches('/'), search_id);
         let mut candidates = Vec::new();
 
         for _ in 0..6 {
             tokio::time::sleep(Duration::from_millis(1000)).await;
             if let Ok(resp) = self.client.get(&poll_url).headers(headers.clone()).send().await {
                 if let Ok(data) = resp.json::<serde_json::Value>().await {
-                    if let Some(responses) = data.get("responses").and_then(|r| r.as_array()) {
+                    let responses_opt = if let Some(arr) = data.as_array() {
+                        Some(arr)
+                    } else {
+                        data.get("responses").and_then(|r| r.as_array())
+                    };
+
+                    if let Some(responses) = responses_opt {
                         for user_resp in responses {
                             let username = user_resp
                                 .get("username")
@@ -162,6 +168,7 @@ impl SoulseekEngine {
                                 .to_string();
                             let free_slots = user_resp
                                 .get("hasFreeUploadSlot")
+                                .or_else(|| user_resp.get("freeUploadSlots"))
                                 .and_then(|s| s.as_bool())
                                 .unwrap_or(true);
                             let upload_speed = user_resp
@@ -181,7 +188,11 @@ impl SoulseekEngine {
                                         continue;
                                     }
 
-                                    let is_locked = file.get("locked").and_then(|l| l.as_bool()).unwrap_or(false);
+                                    let is_locked = file
+                                        .get("isLocked")
+                                        .or_else(|| file.get("locked"))
+                                        .and_then(|l| l.as_bool())
+                                        .unwrap_or(false);
                                     if is_locked {
                                         continue;
                                     }
