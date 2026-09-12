@@ -1,0 +1,68 @@
+#!/bin/sh
+PACKAGE="kvtidal"
+INSTALL_DIR="/var/packages/${PACKAGE}/target"
+VAR_DIR="/var/packages/${PACKAGE}/var"
+PID_FILE="${VAR_DIR}/${PACKAGE}.pid"
+LOG_FILE="${VAR_DIR}/${PACKAGE}.log"
+DAEMON="${INSTALL_DIR}/bin/kv-tidal"
+
+start_daemon() {
+    if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+        return 0
+    fi
+    mkdir -p "$VAR_DIR"
+    export CONFIG_PATH="/var/packages/${PACKAGE}/etc/config.json"
+    export WEB_DIR="${INSTALL_DIR}/web"
+    export RUST_LOG="info"
+
+    nohup "$DAEMON" >> "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+}
+
+stop_daemon() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        kill "$PID" 2>/dev/null
+        for i in 1 2 3 4 5; do
+            if ! kill -0 "$PID" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+        kill -9 "$PID" 2>/dev/null
+        rm -f "$PID_FILE"
+    fi
+}
+
+daemon_status() {
+    if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+case "$1" in
+    start)
+        start_daemon
+        ;;
+    stop)
+        stop_daemon
+        ;;
+    status)
+        if daemon_status; then
+            exit 0
+        else
+            exit 1
+        fi
+        ;;
+    restart)
+        stop_daemon
+        start_daemon
+        ;;
+    log)
+        echo "$LOG_FILE"
+        ;;
+    *)
+        exit 1
+        ;;
+esac

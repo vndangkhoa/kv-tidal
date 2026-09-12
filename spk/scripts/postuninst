@@ -1,0 +1,4 @@
+#!/bin/sh
+PACKAGE="kvtidal"
+rm -rf "/var/packages/${PACKAGE}/target" 2>/dev/null || true
+exit 0

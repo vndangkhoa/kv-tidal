@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00e5ff" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="12" flood-color="#00e5ff" flood-opacity="0.45" />
+    </filter>
+  </defs>
+  
+  <g transform="translate(256, 256)" filter="url(#glow)">
+    <!-- Center Diamond Core -->
+    <polygon points="0,-85 60,0 0,85 -60,0" fill="url(#brandGrad)" />
+    
+    <!-- Left Wing (Letter 'K' geometry & bass pulse) -->
+    <polygon points="-75,-42 -35,0 -75,42 -115,0" fill="#00e5ff" opacity="0.95" />
+    <polygon points="-135,-85 -95,-42 -135,0 -175,-42" fill="#00e5ff" opacity="0.8" />
+    <polygon points="-135,0 -95,42 -135,85 -175,42" fill="#00e5ff" opacity="0.8" />
+
+    <!-- Right Wing (Letter 'V' geometry & treble crest) -->
+    <polygon points="75,-42 115,0 75,42 35,0" fill="#10b981" opacity="0.95" />
+    <polygon points="135,-85 175,-42 135,0 95,-42" fill="#10b981" opacity="0.8" />
+    <polygon points="135,0 175,42 135,85 95,42" fill="#10b981" opacity="0.8" />
+
+    <!-- Top and Bottom Hi-Res Caps -->
+    <polygon points="0,-145 35,-95 0,-45 -35,-95" fill="#33ebff" opacity="0.9" />
+    <polygon points="0,45 35,95 0,145 -35,95" fill="#10b981" opacity="0.9" />
+  </g>
+</svg>

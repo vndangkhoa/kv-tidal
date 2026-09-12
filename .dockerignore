@@ -1,0 +1,23 @@
+# Rust build artifacts
+target/
+backend/target/
+
+# Node / Next.js artifacts
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Runtime data & logs
+data/
+music/
+*.log
+*.pid
+server.log
+
+# Package staging
+build_spk/
+*.spk
+
+# Git
+.git/

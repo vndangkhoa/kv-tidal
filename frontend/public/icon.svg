@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Slate Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#181c24" />
+      <stop offset="50%" stop-color="#12151b" />
+      <stop offset="100%" stop-color="#0a0c0f" />
+    </linearGradient>
+
+    <!-- Tidal Cyan to Lossless Emerald Accent -->
+    <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00e5ff" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+
+    <!-- Outer Ambient Glow Filter -->
+    <filter id="ambientGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="16" result="blur1" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation="32" opacity="0.3" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Squircle Base for App Icon -->
+  <rect x="8" y="8" width="496" height="496" rx="116" fill="url(#bgGrad)" stroke="#262c3a" stroke-width="6" />
+
+  <!-- Subtle Inner Ring -->
+  <rect x="24" y="24" width="464" height="464" rx="100" fill="none" stroke="#00e5ff" stroke-width="1.5" opacity="0.12" />
+
+  <!-- Central Emblem -->
+  <g transform="translate(256, 256) scale(1.08)" filter="url(#ambientGlow)">
+    <!-- Center Core Diamond -->
+    <polygon points="0,-85 60,0 0,85 -60,0" fill="url(#brandGrad)" />
+    
+    <!-- Left Wing (K Monogram / Audio Bass Wave) -->
+    <polygon points="-75,-42 -35,0 -75,42 -115,0" fill="#00e5ff" opacity="0.95" />
+    <polygon points="-135,-85 -95,-42 -135,0 -175,-42" fill="#00e5ff" opacity="0.8" />
+    <polygon points="-135,0 -95,42 -135,85 -175,42" fill="#00e5ff" opacity="0.8" />
+
+    <!-- Right Wing (V Monogram / Audio Treble Crest) -->
+    <polygon points="75,-42 115,0 75,42 35,0" fill="#10b981" opacity="0.95" />
+    <polygon points="135,-85 175,-42 135,0 95,-42" fill="#10b981" opacity="0.8" />
+    <polygon points="135,0 175,42 135,85 95,42" fill="#10b981" opacity="0.8" />
+
+    <!-- Pulse Caps -->
+    <polygon points="0,-145 35,-95 0,-45 -35,-95" fill="#33ebff" opacity="0.9" />
+    <polygon points="0,45 35,95 0,145 -35,95" fill="#10b981" opacity="0.9" />
+  </g>
+</svg>

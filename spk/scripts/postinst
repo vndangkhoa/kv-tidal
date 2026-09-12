@@ -1,0 +1,43 @@
+#!/bin/sh
+PACKAGE="kvtidal"
+ETC_DIR="/var/packages/${PACKAGE}/etc"
+VAR_DIR="/var/packages/${PACKAGE}/var"
+
+mkdir -p "$ETC_DIR" "$VAR_DIR"
+
+MUSIC_DIR="${SYNOPKG_PKG_VAR_music_dir:-/volume1/music}"
+PORT="${SYNOPKG_PKG_VAR_port:-8080}"
+SUB_USER="${SYNOPKG_PKG_VAR_subsonic_user:-admin}"
+SUB_PASS="${SYNOPKG_PKG_VAR_subsonic_pass:-admin}"
+
+CONFIG_FILE="${ETC_DIR}/config.json"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+cat <<EOF > "$CONFIG_FILE"
+{
+  "host": "0.0.0.0",
+  "port": ${PORT},
+  "puid": 1026,
+  "pgid": 100,
+  "data_dir": "${VAR_DIR}",
+  "web_dir": "/var/packages/${PACKAGE}/target/web",
+  "subsonic_user": "${SUB_USER}",
+  "subsonic_password": "${SUB_PASS}",
+  "download_dir": "${MUSIC_DIR}",
+  "libraries": [
+    {
+      "name": "Synology Music Share",
+      "path": "${MUSIC_DIR}",
+      "is_download_target": true,
+      "watch_changes": true
+    }
+  ]
+}
+EOF
+fi
+
+# Ensure sc-kvtidal ownership of package data
+chown -R sc-kvtidal:synocache "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true
+chmod 775 "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true
+
+exit 0

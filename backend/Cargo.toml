@@ -1,0 +1,29 @@
+[package]
+name = "kv-tidal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+lofty = "0.25"
+notify = "8.0"
+walkdir = "2"
+quick-xml = { version = "0.37", features = ["serialize"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures-util = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+bytes = "1"
+tempfile = "3"
+libc = "0.2.189"
+urlencoding = "2.1.3"
+base64 = "0.23.1"
+tokio-util = { version = "0.7.19", features = ["io"] }
+md5 = "0.8.1"
+tower-service = "0.3"

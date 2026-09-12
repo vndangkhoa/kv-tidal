@@ -1,0 +1,43 @@
+[
+  {
+    "step_title": "NAS Music Library Configuration",
+    "items": [
+      {
+        "type": "textfield",
+        "desc": "Existing Synology Music Folder Path (e.g. /volume1/music):",
+        "sub_key": "music_dir",
+        "validator": {
+          "allowBlank": false
+        },
+        "default_value": "/volume1/music"
+      },
+      {
+        "type": "textfield",
+        "desc": "Web & OpenSubsonic Service Port:",
+        "sub_key": "port",
+        "validator": {
+          "allowBlank": false
+        },
+        "default_value": "8080"
+      },
+      {
+        "type": "textfield",
+        "desc": "Subsonic Admin Username:",
+        "sub_key": "subsonic_user",
+        "validator": {
+          "allowBlank": false
+        },
+        "default_value": "admin"
+      },
+      {
+        "type": "password",
+        "desc": "Subsonic Admin Password:",
+        "sub_key": "subsonic_pass",
+        "validator": {
+          "allowBlank": false
+        },
+        "default_value": "admin"
+      }
+    ]
+  }
+]

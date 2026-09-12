@@ -1,0 +1,45 @@
+version: "3.8"
+
+services:
+  # =====================================================================
+  # OPTIONAL: VPN Container to bypass Vietnam IP blocks on Tidal/Qobuz
+  # (Uncomment this service and the network_mode below if needed)
+  # =====================================================================
+  # vpn:
+  #   image: qmcgaw/gluetun:latest
+  #   container_name: kv-tidal-vpn
+  #   cap_add:
+  #     - NET_ADMIN
+  #   environment:
+  #     - VPN_SERVICE_PROVIDER=custom # e.g. protonvpn, mullvad, surfshark, wireguard
+  #     - VPN_TYPE=wireguard
+  #     - SERVER_COUNTRIES=Singapore,United States
+  #   ports:
+  #     - "8080:8080" # Web UI and OpenSubsonic port
+  #   restart: unless-stopped
+
+  # =====================================================================
+  # KV-TIDAL: High-Performance Music Platform
+  # =====================================================================
+  kv-tidal:
+    image: vndangkhoa/kv-tidal:latest
+    container_name: kv-tidal-app
+    # If using VPN above, comment out "ports:" and uncomment "network_mode:"
+    ports:
+      - "8080:8080"
+    # network_mode: "service:vpn"
+    environment:
+      - PUID=1000 # Set to your Synology User UID (id -u admin)
+      - PGID=1000 # Set to your Synology User GID (id -g admin)
+      - PORT=8080
+      - MUSIC_DIR=/music
+      - DATA_DIR=/data
+      - WEB_DIR=/app/web
+      - SUBSONIC_USER=admin
+      - SUBSONIC_PASSWORD=admin
+    volumes:
+      # Map existing Synology Music share
+      - /volume1/music:/music:rw
+      # Persistent app data (database, config)
+      - /volume1/docker/kv-tidal/data:/data:rw
+    restart: unless-stopped
