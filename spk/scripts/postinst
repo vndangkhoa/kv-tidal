@@ -37,6 +37,26 @@ cat > "$CONFIG_FILE" << CONFIG_EOF
 CONFIG_EOF
 fi
 
+lan_ip() {
+    LAN_IP=""
+    if command -v ip >/dev/null 2>&1; then
+        LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+    fi
+    if [ -z "$LAN_IP" ] && command -v hostname >/dev/null 2>&1; then
+        LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
+    if [ -z "$LAN_IP" ] && command -v python3 >/dev/null 2>&1; then
+        LAN_IP="$(python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" 2>/dev/null)"
+    fi
+    echo "${LAN_IP:-localhost}"
+}
+
+HOST_IP="$(lan_ip)"
+[ -z "$HOST_IP" ] && HOST_IP="localhost"
+if [ -f "${INSTALL_DIR}/ui/config" ]; then
+    sed -i "s/@HOST@/${HOST_IP}/g; s/@PORT@/${PORT}/g" "${INSTALL_DIR}/ui/config"
+fi
+
 chmod +x "${INSTALL_DIR}/bin/kv-tidal" 2>/dev/null || true
 chmod 755 "/var/packages/${PACKAGE}/scripts/"* 2>/dev/null || true
 

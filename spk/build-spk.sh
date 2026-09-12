@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 PKG_NAME="kvtidal"
-VERSION="1.0.0-2"
+VERSION="1.0.0-3"
 ARCH="x64"
 DSM_VER="7.2"
 
@@ -14,6 +14,12 @@ STAGE_DIR="$ROOT_DIR/build_spk"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/package/bin"
 mkdir -p "$STAGE_DIR/package/web"
+mkdir -p "$STAGE_DIR/package/ui"
+
+# Copy DSM Main Menu UI integration (config + icons)
+if [ -d "$ROOT_DIR/spk/ui" ]; then
+    cp -r "$ROOT_DIR/spk/ui/"* "$STAGE_DIR/package/ui/"
+fi
 
 # Prefer extracting GLIBC 2.36 compatible binary from docker image if available
 if docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then

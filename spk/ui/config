@@ -1,0 +1,12 @@
+{
+    ".url": {
+        "com.khoavo.kvtidal": {
+            "allUsers": true,
+            "desc": "KV-Tidal",
+            "icon": "images/KVTidal-{0}.png",
+            "title": "KV-Tidal",
+            "type": "url",
+            "url": "http://@HOST@:@PORT@/"
+        }
+    }
+}

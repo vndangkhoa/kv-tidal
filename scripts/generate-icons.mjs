@@ -21,8 +21,9 @@ const faviconSvg = fs.readFileSync(faviconSvgPath);
 
 console.log("🎨 Starting icon generation for KV-Tidal...");
 
-// 1. Web & Mobile PWA PNGs + Synology DSM Package Icons
-const pwaTargets = [
+// 1. Web & Mobile PWA PNGs + Synology DSM Package Icons + Main Menu Icons
+const dsmMenuSizes = [16, 24, 32, 48, 64, 72, 120, 256];
+const targets = [
   { input: iconSvg, file: path.join(rootDir, "frontend", "public", "icon-512.png"), size: 512 },
   { input: iconSvg, file: path.join(rootDir, "frontend", "public", "icon-192.png"), size: 192 },
   { input: iconSvg, file: path.join(rootDir, "frontend", "public", "apple-touch-icon.png"), size: 180 },
@@ -30,9 +31,15 @@ const pwaTargets = [
   // Synology DSM Package Center
   { input: iconSvg, file: path.join(rootDir, "spk", "PACKAGE_ICON_256.PNG"), size: 256 },
   { input: iconSvg, file: path.join(rootDir, "spk", "PACKAGE_ICON.PNG"), size: 72 },
+  // Synology DSM Main Menu Icons
+  ...dsmMenuSizes.map((size) => ({
+    input: iconSvg,
+    file: path.join(rootDir, "spk", "ui", "images", `KVTidal-${size}.png`),
+    size,
+  })),
 ];
 
-for (const target of pwaTargets) {
+for (const target of targets) {
   const dir = path.dirname(target.file);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -59,28 +66,27 @@ for (const size of icoSizes) {
   pngBuffers.push({ size, buffer: buf });
 }
 
-// Construct standard ICO header and directory
 const count = pngBuffers.length;
 const headerSize = 6;
 const dirEntrySize = 16;
 let dataOffset = headerSize + count * dirEntrySize;
 
 const icoHeader = Buffer.alloc(headerSize);
-icoHeader.writeUInt16LE(0, 0); // Reserved
-icoHeader.writeUInt16LE(1, 2); // Type 1 = ICO
-icoHeader.writeUInt16LE(count, 4); // Number of images
+icoHeader.writeUInt16LE(0, 0);
+icoHeader.writeUInt16LE(1, 2);
+icoHeader.writeUInt16LE(count, 4);
 
 const dirBuffers = [];
 for (const item of pngBuffers) {
   const entry = Buffer.alloc(dirEntrySize);
-  entry.writeUInt8(item.size === 256 ? 0 : item.size, 0); // Width
-  entry.writeUInt8(item.size === 256 ? 0 : item.size, 1); // Height
-  entry.writeUInt8(0, 2); // Color palette count
-  entry.writeUInt8(0, 3); // Reserved
-  entry.writeUInt16LE(1, 4); // Color planes
-  entry.writeUInt16LE(32, 6); // Bits per pixel
-  entry.writeUInt32LE(item.buffer.length, 8); // Size of image data
-  entry.writeUInt32LE(dataOffset, 12); // Offset to image data
+  entry.writeUInt8(item.size === 256 ? 0 : item.size, 0);
+  entry.writeUInt8(item.size === 256 ? 0 : item.size, 1);
+  entry.writeUInt8(0, 2);
+  entry.writeUInt8(0, 3);
+  entry.writeUInt16LE(1, 4);
+  entry.writeUInt16LE(32, 6);
+  entry.writeUInt32LE(item.buffer.length, 8);
+  entry.writeUInt32LE(dataOffset, 12);
   dataOffset += item.buffer.length;
   dirBuffers.push(entry);
 }
