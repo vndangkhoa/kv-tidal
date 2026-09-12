@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://pkg.khoavo.myds.me/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--16-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
+  <a href="https://pkg.khoavo.myds.me/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--22-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
   <a href="https://hub.docker.com/r/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Docker_Hub-vndangkhoa%2Fkv--tidal-2496ED?style=flat-square&logo=docker" alt="Docker Hub" /></a>
   <a href="https://ghcr.io/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/GHCR.io-vndangkhoa%2Fkv--tidal-181717?style=flat-square&logo=github" alt="GHCR" /></a>
   <a href="https://git.khoavo.myds.me/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Forgejo-git.khoavo.myds.me-FB542B?style=flat-square&logo=git" alt="Forgejo" /></a>
@@ -31,14 +31,17 @@ Built with a high-concurrency **Rust Axum** backend and a responsive **Next.js 1
 
 ## ✨ Key Features
 
-### 💎 Authentic Hi-Res FLAC & Transparent Audio Badges (v1.0.0-16)
-- **Soulseek (`slskd`) Lossless FLAC Engine**: Connect to a local or remote `slskd` daemon to search and retrieve authentic bit-perfect FLAC files (16-bit / 24-bit, 25MB - 80MB) 100% free with zero Tidal subscription and no geo-blocking.
-- **Tidal HiFi Personal Bearer Token**: Enter your personal Tidal subscriber Bearer Token in `/settings` to stream 24-bit / 192kHz Master FLAC bit-perfect directly from Tidal's official CDN (`sp-storage.tidal.com`).
-- **Source-Aware Audio Badges**: Real-time HTTP header inspection (`x-audio-source`) accurately tags your audio on the desktop player, mobile drawer, and Signal Path modal:
-  - `LOCAL BIT-PERFECT` (Cyan) — 24b/96kHz bit-perfect from NAS storage (`/volume2/music`).
-  - `TIDAL MASTER` (Gold) — 24b/192kHz Master FLAC from Tidal CDN.
-  - `SOULSEEK FLAC` (Purple) — Authentic lossless FLAC from Soulseek P2P.
-  - `WEB OPUS` (Amber) — 160 kbps Opus fallback stream when no HiFi account or local file is present.
+### 💎 Native Bundled Soulseek (`slskd`) Lossless P2P Engine (v1.0.0-22)
+- **Self-Contained Bundled `slskd`**: The Linux x86_64 self-contained Soulseek daemon (`slskd` v0.26.0) is bundled directly inside the SPK package (`package/bin/slskd`, `package/share/slskd/`) and Docker container images. No external Docker, Container Manager, or manual setup required for public end-users.
+- **Zero Fake FLACs**: Eliminated lossy YouTube audio transcoding. Downloaded files are 100% genuine studio lossless FLAC files (16-bit to 24-bit/96kHz Hi-Res masters, 25MB - 120MB) tagged with high-res album art and placed into `/volume2/music`.
+- **Top-Right Corner Live Progress HUD**: Maps live `slskd` P2P transfer telemetry into an animated SVG radial progress ring, real-time percentage (`45%`), and transfer speed (`2.4 MB/s`).
+- **Tidal HiFi Personal Bearer Token**: Optional support for personal Tidal subscriber Bearer Tokens in `/settings` to stream 24-bit / 192kHz Master FLAC directly from Tidal's official CDN (`sp-storage.tidal.com`).
+
+### 🎚️ Luxury Audiophile Player Bar & Smart FLAC Auto-Download (v1.0.0-22)
+- **Unified Stream Quality Capsule (`[ FLAC | OPUS | ✨ ]`)**: Clean, minimalist toggle eliminating redundant badges. Displays warm amber glow on Opus, high-tech cyan glow on FLAC, and a direct `<Sparkles />` trigger to inspect the bit-perfect hardware signal path.
+- **Default Opus Streaming**: Online music searches and trending songs stream in fast, lightweight 160kbps Opus by default for instantaneous click-to-play startup.
+- **Smart FLAC Auto-Download & Seamless Mid-Song Hot-Swap**: Tapping `FLAC` on an online track automatically triggers background Soulseek lossless retrieval, displays live transfer progress on the button (`[ ⏳ 45% | OPUS ]`), keeps playing Opus uninterrupted, and seamlessly hot-swaps to the bit-perfect FLAC Master at the exact millisecond upon completion.
+- **Studio Audio Suite Popover**: Single-button studio suite consolidating 10-Band Parametric Equalizer & Headphone AutoEQ Presets, Real-Time FFT Spectrum Analyzer, and Analog Ballistic VU Meters (Accuphase / McIntosh needles).
 
 ### 🎵 100% Full-Length Music Streaming (No 30-Second Cutoffs)
 - **Multi-Tier Stream Resolution Engine**: Resolves full-length audio streams with automatic failover:
@@ -97,9 +100,9 @@ Running as a native DSM package consumes **less than 25MB RAM** with near-zero C
 
 #### Method B: Manual SPK Install
 1. Download the latest package:
-   - **[⬇️ Download kvtidal-1.0.0-15.spk](https://spk.khoavo.myds.me/kvtidal-1.0.0-15.spk)**
+   - **[⬇️ Download kvtidal-1.0.0-22.spk](https://spk.khoavo.myds.me/kvtidal-1.0.0-22.spk)**
 2. In DSM **Package Center**, click **Manual Install** in the top right.
-3. Select `kvtidal-1.0.0-15.spk` and follow the setup wizard:
+3. Select `kvtidal-1.0.0-22.spk` and follow the setup wizard:
    - **Music Directory**: Automatically defaults to `/volume2/music` or `/volume1/music`.
    - **Port**: Default is `26784`.
    - **Subsonic User / Password**: Set your desired credentials (default: `admin` / `admin`).
