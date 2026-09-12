@@ -183,6 +183,79 @@ Stored in `/var/packages/kvtidal/etc/config.json` (SPK) or `/data/config.json` (
 
 ---
 
+## 🔄 Data Flow Architecture
+
+KV-Tidal is designed with a high-throughput, non-blocking asynchronous pipeline in Rust. Below are the key data flows for audio streaming, cover art discovery, and atomic downloading.
+
+### 1. Audio Streaming Pipeline
+
+```mermaid
+flowchart TD
+    Client["📱 Client (Web PWA / Subsonic Player)"] -->|GET /api/stream?id=...&artist=...&title=...| StreamHandler["⚡ KV-Tidal Stream Engine (Axum)"]
+
+    subgraph Local_Flow["📁 Local NAS Music Playback"]
+        StreamHandler -->|Check Path / MD5 ID| LocalCheck{"Local File Exists?"}
+        LocalCheck -->|Yes| FormatCheck{"Format Type?"}
+        FormatCheck -->|DSD .dsf / .dff| Transcoder["🎛️ Real-Time DSD Transcoder<br/>(24-bit / 88.2 kHz FLAC decimation)"]
+        FormatCheck -->|FLAC / WAV / MP3 / AAC| DirectStream["Direct Bit-Perfect Stream"]
+        Transcoder --> Proxy["HTTP Range Stream Proxy<br/>(Status 206 Partial Content)"]
+        DirectStream --> Proxy
+    end
+
+    subgraph Online_Flow["🌐 Online Multi-Tier Stream Resolver"]
+        LocalCheck -->|No| Resolver["Stream Resolver (Singleflight Deduplicator)"]
+        Resolver --> Tier1{"Tier 1: Local Invidious<br/>(127.0.0.1:7601 on NAS)"}
+        Tier1 -->|Hit ~10ms| CDN["Direct Opus / AAC Stream"]
+        Tier1 -->|Miss / Offline| Tier2{"Tier 2: Standalone yt-dlp<br/>(Custom TMPDIR on Volume)"}
+        Tier2 -->|Extracted| CDN
+        Tier2 -->|Fail| Tier3{"Tier 3: Public Invidious Grid<br/>(inv.tux.pizza, yewtu.be)"}
+        Tier3 -->|Resolved| CDN
+        CDN --> Proxy
+    end
+
+    Proxy -->|Chunked Audio Buffer (Range: bytes=...)| Client
+```
+
+---
+
+### 2. Multi-Tier Artwork Discovery Flow
+
+```mermaid
+flowchart TD
+    Req["🖼️ Artwork Request (/api/fs/cover or /rest/getCoverArt)"] --> CacheCheck{"1. Disk Cache Hit?<br/>(${DATA_DIR}/covers/)"}
+    CacheCheck -->|Yes| Serve["Serve Image (HTTP 200, max-age: 86400)"]
+    
+    CacheCheck -->|No| Sidecar{"2. Sidecar Image in Folder?<br/>(folder.jpg, cover.jpg, front.png)"}
+    Sidecar -->|Found| SaveDisk["Persist to Disk Cache"]
+    
+    Sidecar -->|Not Found| ParentWalk{"3. Multi-Disc Parent Walk?<br/>(CD1, CD2, Mat A, Mat B)"}
+    ParentWalk -->|Found| SaveDisk
+    
+    ParentWalk -->|Not Found| EmbeddedTag{"4. Embedded Tag in Audio File?<br/>(lofty ID3v2 / Vorbis / MP4 cover)"}
+    EmbeddedTag -->|Extracted| SaveDisk
+    
+    EmbeddedTag -->|Not Found| AppleCDN{"5. Online Apple Music CDN<br/>(High-Res 1000x1000 artwork)"}
+    AppleCDN -->|Downloaded| SaveDisk
+    
+    SaveDisk --> Serve
+```
+
+---
+
+### 3. Atomic Lossless Download Flow
+
+```
+[User Trigger] ──► [Stream Resolver] ──► [Write to /volume2/music/.part]
+                                                        │
+                                                        ▼
+[OpenSubsonic Sync] ◄── [inotify Event] ◄── [Atomic Rename to {Artist}/{Album}/{Track} - {Title}.flac]
+                                                        ▲
+                                                        │
+                                         [lofty Tagging & Artwork Embedding]
+```
+
+---
+
 ## 🏗️ Architecture
 
 ```
