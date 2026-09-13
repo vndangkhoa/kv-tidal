@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://pkg.khoavo.myds.me/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--26-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
+  <a href="https://pkg.khoavo.myds.me/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--27-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
   <a href="https://hub.docker.com/r/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Docker_Hub-vndangkhoa%2Fkv--tidal-2496ED?style=flat-square&logo=docker" alt="Docker Hub" /></a>
   <a href="https://ghcr.io/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/GHCR.io-vndangkhoa%2Fkv--tidal-181717?style=flat-square&logo=github" alt="GHCR" /></a>
   <a href="https://git.khoavo.myds.me/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Forgejo-git.khoavo.myds.me-FB542B?style=flat-square&logo=git" alt="Forgejo" /></a>
@@ -35,7 +35,7 @@ Built with a high-concurrency **Rust Axum** backend and a responsive **Next.js 1
 
 ## ✨ Key Features
 
-### 💎 Native Bundled Soulseek (`slskd`) Lossless P2P Engine (v1.0.0-26)
+### 💎 Native Bundled Soulseek (`slskd`) Lossless P2P Engine (v1.0.0-27)
 - **Self-Contained Bundled `slskd`**: The Linux x86_64 self-contained Soulseek daemon (`slskd` v0.26.0) is bundled directly inside the SPK package (`package/bin/slskd`, `package/share/slskd/`) and Docker container images. No external Docker, Container Manager, or manual setup required for public end-users.
 - **Intelligent Candidate Scoring Algorithm**: Multi-factor scoring matching exact duration (±5s bonus, divergence penalties), negative keyword filtering (`karaoke`, `instrumental`, `remix`, `live`, `cover`, `demo` filtered out when not in track title), peer upload speed scoring, and free upload slot priority.
 - **Full Download Lifecycle Controls**: Real-time Pause, Resume, and Cancel/Remove actions with bidirectional state synchronization with `slskd` P2P transfers.
@@ -45,7 +45,7 @@ Built with a high-concurrency **Rust Axum** backend and a responsive **Next.js 1
 - **Top-Right Corner Live Progress HUD**: Maps live `slskd` P2P transfer telemetry into an animated SVG radial progress ring, real-time percentage (`45%`), and transfer speed (`2.4 MB/s`).
 - **Tidal HiFi Personal Bearer Token**: Optional support for personal Tidal subscriber Bearer Tokens in `/settings` to stream 24-bit / 192kHz Master FLAC directly from Tidal's official CDN (`sp-storage.tidal.com`).
 
-### 🎚️ Luxury Audiophile Player Bar & Smart FLAC Auto-Download (v1.0.0-26)
+### 🎚️ Luxury Audiophile Player Bar & Smart FLAC Auto-Download (v1.0.0-27)
 - **Unified Stream Quality Capsule (`[ FLAC | OPUS | ✨ ]`)**: Clean, minimalist toggle eliminating redundant badges. Displays warm amber glow on Opus, high-tech cyan glow on real FLAC, and a direct `<Sparkles />` trigger to inspect the bit-perfect hardware signal path.
 - **Default Opus Streaming**: Online music searches and trending songs stream in fast, lightweight 160kbps Opus by default for instantaneous click-to-play startup.
 - **Smart FLAC Auto-Download & Seamless Mid-Song Hot-Swap**: Tapping `FLAC` on an online track automatically triggers background Soulseek lossless retrieval, displays live transfer progress on the button (`[ ⏳ 45% | OPUS ]`), keeps playing Opus uninterrupted, and seamlessly hot-swaps to the real bit-perfect FLAC Master at the exact millisecond upon completion.
@@ -108,9 +108,9 @@ Running as a native DSM package consumes **less than 25MB RAM** with near-zero C
 
 #### Method B: Manual SPK Install
 1. Download the latest package:
-   - **[⬇️ Download kvtidal-1.0.0-26.spk](https://spk.khoavo.myds.me/kvtidal-1.0.0-26.spk)**
+   - **[⬇️ Download kvtidal-1.0.0-27.spk](https://spk.khoavo.myds.me/kvtidal-1.0.0-27.spk)**
 2. In DSM **Package Center**, click **Manual Install** in the top right.
-3. Select `kvtidal-1.0.0-26.spk` and follow the setup wizard:
+3. Select `kvtidal-1.0.0-27.spk` and follow the setup wizard:
    - **Music Directory**: Automatically defaults to `/volume2/music` or `/volume1/music`.
    - **Port**: Default is `26784`.
    - **Subsonic User / Password**: Set your desired credentials (default: `admin` / `admin`).

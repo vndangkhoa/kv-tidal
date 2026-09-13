@@ -359,4 +359,16 @@ async fn test_stream_local_track_with_force_opus() {
     assert_eq!(res.status(), axum::http::StatusCode::OK);
 }
 
+#[test]
+fn test_clean_query_title() {
+    use kv_tidal::engines::soulseek::clean_query_title;
+
+    assert_eq!(clean_query_title("17 - Toughest (Bonus Track)"), "Toughest");
+    assert_eq!(clean_query_title("01. Shape of You"), "Shape of You");
+    assert_eq!(clean_query_title("Bad Habits [Explicit]"), "Bad Habits");
+    assert_eq!(clean_query_title("Something (Remastered 2009)"), "Something");
+    assert_eq!(clean_query_title("Normal Title"), "Normal Title");
+    assert_eq!(clean_query_title("1999"), "1999");
+}
+
 

@@ -155,6 +155,9 @@ export function AudioPlayer() {
   const isTidalMaster = currentTrack.source === "tidal-direct-hifi";
   const isSoulseek = currentTrack.source === "soulseek-lossless";
   const isWebOpus = currentTrack.source === "web-stream-opus" || (!isLocal && !isTidalMaster && !isSoulseek && !currentTrack.isDsd);
+  const isPlayingFlac = !isWebOpus && (isLocal || isTidalMaster || isSoulseek || !!currentTrack.format?.toUpperCase().includes("FLAC") || !!currentTrack.isDsd);
+  const isPlayingOpus = isWebOpus;
+  const playingFileName = currentTrack.fileName || (currentTrack.filePath ? currentTrack.filePath.split("/").pop() : null);
 
   // Switch quality with automatic Soulseek FLAC download trigger & smooth playback
   const handleQualitySwitch = async (targetQuality: "flac" | "opus") => {
@@ -251,8 +254,12 @@ export function AudioPlayer() {
               {currentTrack.artist}
             </div>
             {/* Live Codec Stream Sub-label */}
-            <div className="text-[10px] font-mono text-textSecondary/80 truncate mt-0.5">
+            <div
+              className="text-[10px] font-mono text-textSecondary/80 truncate mt-0.5"
+              title={playingFileName ? `${playingFileName} (${sourceLabel})` : sourceLabel}
+            >
               {formatName} • {bitDepth}b/{sampleRateKhz}kHz • {bitrateDisplay}
+              {playingFileName ? ` • ${playingFileName}` : ""}
             </div>
           </div>
 
@@ -399,14 +406,16 @@ export function AudioPlayer() {
             <button
               onClick={() => handleQualitySwitch("flac")}
               title={
-                downloadStatus.isDownloading
+                isPlayingFlac
+                  ? "Currently streaming Bit-Perfect Lossless FLAC Master"
+                  : downloadStatus.isDownloading
                   ? `Soulseek P2P Download in progress (${downloadStatus.progress}%). Playing Opus smoothly until FLAC is ready.`
                   : downloadStatus.isDone || isLocal
-                  ? "Bit-Perfect Lossless FLAC Master. Click to play."
+                  ? "Bit-Perfect Lossless FLAC Master available. Click to play."
                   : "Switch to FLAC — will automatically download lossless studio FLAC via Soulseek & play seamlessly"
               }
               className={`px-2.5 py-0.5 rounded-full transition-all cursor-pointer flex items-center space-x-1 font-bold ${
-                streamQuality === "flac"
+                isPlayingFlac
                   ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/50 shadow-[0_0_8px_rgba(0,255,255,0.3)]"
                   : downloadStatus.isDownloading
                   ? "bg-cyan-950/60 text-cyan-300 border border-cyan-500/40 animate-pulse"
@@ -422,10 +431,10 @@ export function AudioPlayer() {
                 </>
               ) : (
                 <>
-                  {streamQuality === "flac" && (
+                  {isPlayingFlac && (
                     <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_#00ffff]" />
                   )}
-                  {downloadStatus.isDone && streamQuality !== "flac" && (
+                  {downloadStatus.isDone && !isPlayingFlac && (
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                   )}
                   <span>FLAC</span>
@@ -436,14 +445,21 @@ export function AudioPlayer() {
             {/* OPUS Option */}
             <button
               onClick={() => handleQualitySwitch("opus")}
-              title="Switch to OPUS (Fast 160kbps Web Stream for instant playback)"
-              className={`px-2.5 py-0.5 rounded-full transition-all cursor-pointer font-bold ${
-                streamQuality === "opus"
+              title={
+                isPlayingOpus
+                  ? "Currently streaming Fast 160kbps Web Stream (Opus)"
+                  : "Switch to OPUS (Fast 160kbps Web Stream for instant playback)"
+              }
+              className={`px-2.5 py-0.5 rounded-full transition-all cursor-pointer font-bold flex items-center space-x-1 ${
+                isPlayingOpus
                   ? "bg-amber-500/25 text-amber-300 border border-amber-500/50 shadow-[0_0_8px_rgba(245,158,11,0.25)]"
                   : "text-textSecondary hover:text-white"
               }`}
             >
-              OPUS
+              {isPlayingOpus && (
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_6px_#f59e0b]" />
+              )}
+              <span>OPUS</span>
             </button>
 
             {/* Hardware Signal Path Inspector Trigger */}
@@ -723,12 +739,15 @@ export function AudioPlayer() {
           >
             <ChevronDown className="w-6 h-6" />
           </button>
-          <div className="text-center">
-            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+          <div className="text-center px-2 min-w-0">
+            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary block truncate">
               {sourceLabel}
             </span>
-            <p className="text-xs font-semibold text-white truncate max-w-[200px]">
-              {currentTrack.album || formatName}
+            <p
+              className="text-xs font-semibold text-white truncate max-w-[260px]"
+              title={playingFileName ? `${playingFileName} (${currentTrack.album || formatName})` : currentTrack.album || formatName}
+            >
+              {playingFileName || currentTrack.album || formatName}
             </p>
           </div>
           <button
@@ -789,20 +808,20 @@ export function AudioPlayer() {
               <h2 className="text-xl font-bold text-white truncate">{currentTrack.title}</h2>
               <p className="text-sm text-textSecondary truncate mt-0.5">{currentTrack.artist}</p>
               <div className="flex items-center space-x-2.5 mt-1.5">
-                <span className="text-[11px] font-mono text-textSecondary/70">
+                <span className="text-[11px] font-mono text-textSecondary/70 truncate max-w-[190px]" title={playingFileName || formatName}>
                   {formatName} • {bitDepth}-bit / {sampleRateKhz} kHz • DR{currentTrack.drScore || 12}
                 </span>
-                <div className="flex items-center bg-card border border-border rounded-lg p-0.5 text-[9px] font-mono font-bold">
+                <div className="flex items-center bg-card border border-border rounded-lg p-0.5 text-[9px] font-mono font-bold flex-shrink-0">
                   <button
                     onClick={() => handleQualitySwitch("flac")}
                     className={`px-1.5 py-0.5 rounded transition-all cursor-pointer flex items-center space-x-1 ${
-                      streamQuality === "flac"
+                      isPlayingFlac
                         ? "bg-cyan-500/25 text-cyan-300 border border-cyan-500/40"
                         : downloadStatus.isDownloading
                         ? "bg-cyan-950/60 text-cyan-300 border border-cyan-500/40 animate-pulse"
                         : downloadStatus.isDone
                         ? "text-emerald-400 border border-emerald-500/50 bg-emerald-500/10"
-                        : "text-textSecondary"
+                        : "text-textSecondary hover:text-white"
                     }`}
                   >
                     {downloadStatus.isDownloading ? (
@@ -812,7 +831,10 @@ export function AudioPlayer() {
                       </>
                     ) : (
                       <>
-                        {downloadStatus.isDone && streamQuality === "opus" && (
+                        {isPlayingFlac && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_#00ffff]" />
+                        )}
+                        {downloadStatus.isDone && isPlayingOpus && (
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-0.5" />
                         )}
                         <span>FLAC</span>
@@ -821,13 +843,16 @@ export function AudioPlayer() {
                   </button>
                   <button
                     onClick={() => handleQualitySwitch("opus")}
-                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
-                      streamQuality === "opus"
-                        ? "bg-amber-500/25 text-amber-300 border border-amber-500/40"
-                        : "text-textSecondary"
+                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer flex items-center space-x-1 ${
+                      isPlayingOpus
+                        ? "bg-amber-500/25 text-amber-300 border border-amber-500/40 font-bold"
+                        : "text-textSecondary hover:text-white"
                     }`}
                   >
-                    OPUS
+                    {isPlayingOpus && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_6px_#f59e0b]" />
+                    )}
+                    <span>OPUS</span>
                   </button>
                 </div>
               </div>

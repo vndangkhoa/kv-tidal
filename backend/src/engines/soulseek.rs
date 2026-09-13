@@ -195,6 +195,27 @@ impl SoulseekEngine {
         Ok(())
     }
 
+    /// Restart slskd application to reload configuration from slskd.yml
+    pub async fn restart(&self) -> Result<(), String> {
+        let (base_url, api_key, enabled) = {
+            let cfg = self.config.read().await;
+            (cfg.soulseek_url.clone(), cfg.soulseek_api_key.clone(), cfg.soulseek_enabled)
+        };
+        if !enabled {
+            return Ok(());
+        }
+        let endpoint = format!("{}/api/v0/application", base_url.trim_end_matches('/'));
+        let headers = self.build_headers(api_key.as_deref());
+        let _ = self.client
+            .put(&endpoint)
+            .headers(headers)
+            .send()
+            .await;
+        // Wait briefly for slskd to restart and re-authenticate
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        Ok(())
+    }
+
     /// Calculate match score (0-100+) between candidate and target track metadata
     pub fn calculate_candidate_score(
         candidate_filename: &str,
@@ -213,7 +234,8 @@ impl SoulseekEngine {
             .unwrap_or(&norm_path)
             .to_string();
 
-        let clean_title = query.title.to_lowercase()
+        let cleaned_t = clean_query_title(&query.title);
+        let clean_title = cleaned_t.to_lowercase()
             .replace(|c: char| !c.is_alphanumeric() && c != ' ', " ");
         let title_tokens: Vec<&str> = clean_title.split_whitespace().filter(|t| !t.is_empty()).collect();
 
@@ -486,8 +508,9 @@ impl SoulseekEngine {
 
         let headers = self.build_headers(api_key.as_deref());
 
+        let cleaned_t = clean_query_title(&query.title);
         let clean_artist = query.artist.replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
-        let clean_title = query.title.replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
+        let clean_title = cleaned_t.replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
 
         // Primary Tier 1: Search "{Artist} {Title} flac"
         let q1 = format!("{} {} flac", clean_artist.trim(), clean_title.trim());
@@ -991,4 +1014,56 @@ soulseek:
     std::fs::write(&config_path, yaml_content)?;
     info!("Synchronized slskd native configuration at {:?}", config_path);
     Ok(())
+}
+
+/// Cleans track titles by stripping leading track indices (e.g. "17 - ", "01. ")
+/// and parenthetical metadata tags (e.g. "(Bonus Track)", "[Remastered]").
+pub fn clean_query_title(title: &str) -> String {
+    let mut t = title.trim();
+    // Strip leading track numbers like "17 - ", "01. ", "12 "
+    if let Some(pos) = t.find(|c: char| c == '-' || c == '.' || c == ' ') {
+        let prefix = &t[..pos];
+        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) && pos <= 4 {
+            t = t[pos + 1..].trim_start_matches(|c: char| c == '-' || c == '.' || c == ' ');
+        }
+    }
+    // Remove bracketed or parenthesized tags like "(Bonus Track)", "[Deluxe]", "(Remastered 2021)"
+    let mut cleaned = String::new();
+    let mut depth = 0;
+    let mut in_tag = String::new();
+    for c in t.chars() {
+        if c == '(' || c == '[' {
+            depth += 1;
+            in_tag.clear();
+        } else if c == ')' || c == ']' {
+            if depth > 0 {
+                depth -= 1;
+                let lower_tag = in_tag.to_lowercase();
+                if !(lower_tag.contains("bonus")
+                    || lower_tag.contains("deluxe")
+                    || lower_tag.contains("remaster")
+                    || lower_tag.contains("explicit")
+                    || lower_tag.contains("version")
+                    || lower_tag.contains("edit")
+                    || lower_tag.contains("audio")
+                    || lower_tag.contains("official")
+                    || lower_tag.contains("video"))
+                {
+                    cleaned.push(' ');
+                    cleaned.push_str(&in_tag);
+                }
+                in_tag.clear();
+            }
+        } else if depth > 0 {
+            in_tag.push(c);
+        } else {
+            cleaned.push(c);
+        }
+    }
+    let res = cleaned.trim();
+    if res.is_empty() {
+        t.to_string()
+    } else {
+        res.to_string()
+    }
 }

@@ -244,6 +244,8 @@ function LibraryContent() {
       source: "local",
       drScore: t.dr_score || 12,
       isDsd: t.is_dsd,
+      filePath: t.file_path,
+      fileName: t.file_path ? t.file_path.split("/").pop() : undefined,
     }));
 
     playTrack(queueItems[0], queueItems);

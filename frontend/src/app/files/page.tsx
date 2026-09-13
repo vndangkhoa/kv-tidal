@@ -548,6 +548,8 @@ export default function FilesPage() {
         isDsd: entry.format?.toLowerCase() === "dsf" || entry.format?.toLowerCase() === "dff",
         duration: entry.duration,
         coverUrl: entry.cover_url || `/api/fs/cover?path=${encodeURIComponent(entry.path)}`,
+        filePath: entry.path,
+        fileName: entry.name,
       }));
   };
 
@@ -590,6 +592,8 @@ export default function FilesPage() {
       drScore: entry.dr_score || 13,
       isDsd: entry.format.toLowerCase() === "dsf" || entry.format.toLowerCase() === "dff",
       duration: entry.duration,
+      filePath: entry.path,
+      fileName: entry.name,
     };
 
     playTrack(track);

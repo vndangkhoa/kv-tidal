@@ -75,72 +75,91 @@ async fn update_settings(
     State(state): State<AppState>,
     Json(payload): Json<UpdateSettingsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut cfg = state.config.write().await;
+    let mut slsk_creds_changed = false;
+    let config_path;
 
-    if let Some(token) = payload.tidal_access_token {
-        let clean = token.trim();
-        cfg.tidal_access_token = if clean.is_empty() { None } else { Some(clean.to_string()) };
-        state.tidal.set_credentials(cfg.tidal_access_token.clone(), None).await;
-    }
+    {
+        let mut cfg = state.config.write().await;
 
-    if let Some(quality) = payload.tidal_quality {
-        cfg.tidal_quality = quality.clone();
-        state.tidal.set_credentials(None, Some(quality)).await;
-    }
-
-    if let Some(enabled) = payload.soulseek_enabled {
-        cfg.soulseek_enabled = enabled;
-    }
-
-    if let Some(url) = payload.soulseek_url {
-        if !url.trim().is_empty() {
-            cfg.soulseek_url = url.trim().to_string();
+        if let Some(token) = payload.tidal_access_token {
+            let clean = token.trim();
+            cfg.tidal_access_token = if clean.is_empty() { None } else { Some(clean.to_string()) };
+            state.tidal.set_credentials(cfg.tidal_access_token.clone(), None).await;
         }
-    }
 
-    if let Some(key) = payload.soulseek_api_key {
-        let clean = key.trim();
-        cfg.soulseek_api_key = if clean.is_empty() { None } else { Some(clean.to_string()) };
-    }
-
-    if let Some(user) = payload.soulseek_username {
-        let clean = user.trim();
-        cfg.soulseek_username = if clean.is_empty() { None } else { Some(clean.to_string()) };
-    }
-
-    if let Some(pass) = payload.soulseek_password {
-        let clean = pass.trim();
-        cfg.soulseek_password = if clean.is_empty() { None } else { Some(clean.to_string()) };
-    }
-
-    if let Some(dir) = payload.download_dir {
-        if !dir.trim().is_empty() {
-            cfg.download_dir = PathBuf::from(dir.trim());
+        if let Some(quality) = payload.tidal_quality {
+            cfg.tidal_quality = quality.clone();
+            state.tidal.set_credentials(None, Some(quality)).await;
         }
+
+        if let Some(enabled) = payload.soulseek_enabled {
+            cfg.soulseek_enabled = enabled;
+        }
+
+        if let Some(url) = payload.soulseek_url {
+            if !url.trim().is_empty() {
+                cfg.soulseek_url = url.trim().to_string();
+            }
+        }
+
+        if let Some(key) = payload.soulseek_api_key {
+            let clean = key.trim();
+            cfg.soulseek_api_key = if clean.is_empty() { None } else { Some(clean.to_string()) };
+        }
+
+        if let Some(user) = payload.soulseek_username {
+            let clean = user.trim();
+            let new_user = if clean.is_empty() { None } else { Some(clean.to_string()) };
+            if new_user != cfg.soulseek_username {
+                cfg.soulseek_username = new_user;
+                slsk_creds_changed = true;
+            }
+        }
+
+        if let Some(pass) = payload.soulseek_password {
+            let clean = pass.trim();
+            let new_pass = if clean.is_empty() { None } else { Some(clean.to_string()) };
+            if new_pass != cfg.soulseek_password {
+                cfg.soulseek_password = new_pass;
+                slsk_creds_changed = true;
+            }
+        }
+
+        if let Some(dir) = payload.download_dir {
+            if !dir.trim().is_empty() {
+                cfg.download_dir = PathBuf::from(dir.trim());
+            }
+        }
+
+        // Persist configuration to disk
+        config_path = std::env::var("CONFIG_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| cfg.data_dir.join("config.json"));
+
+        if let Err(e) = cfg.save(&config_path) {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed saving settings to {:?}: {}", config_path, e),
+            ));
+        }
+
+        // Synchronize native slskd configuration (slskd.yml)
+        let _ = crate::engines::soulseek::sync_slskd_config(
+            &cfg.data_dir,
+            &cfg.download_dir,
+            cfg.soulseek_username.as_deref(),
+            cfg.soulseek_password.as_deref(),
+        );
+    } // cfg write lock dropped here before calling async methods to prevent deadlock
+
+    // If Soulseek credentials changed, restart slskd so it boots with updated credentials;
+    // otherwise just trigger connect.
+    if slsk_creds_changed {
+        info!("Soulseek credentials changed; restarting slskd daemon to reload configuration...");
+        let _ = state.soulseek.restart().await;
+    } else {
+        let _ = state.soulseek.trigger_connect().await;
     }
-
-    // Persist configuration to disk
-    let config_path = std::env::var("CONFIG_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| cfg.data_dir.join("config.json"));
-
-    if let Err(e) = cfg.save(&config_path) {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed saving settings to {:?}: {}", config_path, e),
-        ));
-    }
-
-    // Synchronize native slskd configuration (slskd.yml)
-    let _ = crate::engines::soulseek::sync_slskd_config(
-        &cfg.data_dir,
-        &cfg.download_dir,
-        cfg.soulseek_username.as_deref(),
-        cfg.soulseek_password.as_deref(),
-    );
-
-    // Trigger immediate connection to Soulseek network via slskd
-    let _ = state.soulseek.trigger_connect().await;
 
     info!("Settings updated and saved to {:?}", config_path);
     Ok(Json(serde_json::json!({

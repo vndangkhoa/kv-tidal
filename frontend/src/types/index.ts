@@ -44,6 +44,8 @@ export interface PlayableTrack {
   originalYear?: number;
   remasterYear?: number;
   bookletUrl?: string;
+  fileName?: string;
+  filePath?: string;
 }
 
 export interface SearchResultItem {

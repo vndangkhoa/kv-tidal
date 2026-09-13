@@ -50,6 +50,21 @@ get_lan_ip() {
   hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1"
 }
 
+open_browser() {
+  if [ "$NO_BROWSER" = true ]; then
+    return 0
+  fi
+  local url="http://localhost:${PORT}"
+  if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+    echo -e "${CYAN}--> Opening Web Dashboard in default browser (${url})...${NC}\n"
+    if command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "$url" >/dev/null 2>&1 &
+    elif command -v gio >/dev/null 2>&1; then
+      gio open "$url" >/dev/null 2>&1 &
+    fi
+  fi
+}
+
 get_pid() {
   if [ -f "$PID_FILE" ]; then
     local pid
@@ -122,9 +137,6 @@ is_slskd_running() {
 start_slskd() {
   if [ -x "$SLSKD_BINARY" ]; then
     if is_slskd_running; then
-      local spid
-      spid=$(get_slskd_pid)
-      echo -e "${YELLOW}Soulseek P2P Daemon (slskd) is already running (PID: $spid) on port $SLSKD_PORT.${NC}"
       return 0
     fi
 
@@ -235,8 +247,23 @@ do_start() {
   if is_running; then
     local pid
     pid=$(get_pid)
-    echo -e "${YELLOW}KV-Tidal is already running (PID: $pid) on port $PORT.${NC}"
-    echo -e "Use: ${BOLD}$0 restart${NC} to reload, or ${BOLD}$0 stop${NC} to terminate."
+    LAN_IP=$(get_lan_ip)
+    local spid
+    spid=$(get_slskd_pid)
+    echo -e "${GREEN}● KV-Tidal is already running and online! (PID: $pid)${NC}"
+    echo -e "${CYAN}=================================================================${NC}"
+    echo -e "${BOLD}${GREEN}  KV-TIDAL AUDIOPHILE PLATFORM IS ONLINE${NC}"
+    echo -e "${CYAN}=================================================================${NC}"
+    echo -e "  • Web Dashboard:    ${BOLD}${CYAN}http://localhost:${PORT}${NC}  (or http://${LAN_IP}:${PORT})"
+    echo -e "  • OpenSubsonic API: ${BOLD}${CYAN}http://${LAN_IP}:${PORT}/rest${NC}"
+    echo -e "  • Subsonic Auth:    User: ${BOLD}admin${NC} | Pass: ${BOLD}admin${NC}"
+    if [ -n "$spid" ]; then
+      echo -e "  • Soulseek Daemon:  Port ${SLSKD_PORT} (PID: ${spid})"
+    fi
+    echo -e "  • Logs:             ${LOG_FILE}"
+    echo -e "${CYAN}=================================================================${NC}"
+    echo -e "Commands: ${BOLD}$0 restart${NC} | ${BOLD}$0 stop${NC} | ${BOLD}$0 status${NC} | ${BOLD}$0 logs${NC}\n"
+    open_browser
     return 0
   fi
 
@@ -284,6 +311,7 @@ do_start() {
     echo -e "  • OpenSubsonic API: ${CYAN}http://${LAN_IP}:${PORT}/rest${NC}"
     echo -e "  • Audio Engine:     Bit-Perfect FLAC / 24-bit 192kHz / Web Audio DSP"
     echo -e "${CYAN}=================================================================${NC}\n"
+    open_browser
     echo "$$" > "$PID_FILE"
     exec "$BINARY"
   else
@@ -316,6 +344,7 @@ do_start() {
       echo -e "  • Logs:             ${LOG_FILE}"
       echo -e "${CYAN}=================================================================${NC}"
       echo -e "Commands: ${BOLD}$0 status${NC} | ${BOLD}$0 logs${NC} | ${BOLD}$0 stop${NC} | ${BOLD}$0 restart${NC}\n"
+      open_browser
     else
       echo -e "${RED}✗ KV-Tidal failed to start. Last log output:${NC}"
       tail -n 25 "$LOG_FILE" 2>/dev/null || true
@@ -369,12 +398,21 @@ do_logs() {
 # --- CLI Dispatcher ---
 COMMAND="${1:-start}"
 FOREGROUND=false
+NO_BROWSER=false
+
+for arg in "$@"; do
+  case "$arg" in
+    -f|--foreground)
+      FOREGROUND=true
+      ;;
+    -n|--no-browser)
+      NO_BROWSER=true
+      ;;
+  esac
+done
 
 case "$COMMAND" in
   start)
-    if [ "$2" = "-f" ] || [ "$2" = "--foreground" ]; then
-      FOREGROUND=true
-    fi
     do_start
     ;;
   stop)
@@ -391,6 +429,9 @@ case "$COMMAND" in
   logs)
     do_logs
     ;;
+  open)
+    open_browser
+    ;;
   build)
     do_build
     ;;
@@ -398,21 +439,27 @@ case "$COMMAND" in
     FOREGROUND=true
     do_start
     ;;
+  -n|--no-browser)
+    NO_BROWSER=true
+    do_start
+    ;;
   help|--help|-h)
-    echo -e "${BOLD}Usage:${NC} $0 {start|stop|restart|status|logs|build} [-f|--foreground]"
+    echo -e "${BOLD}Usage:${NC} $0 {start|stop|restart|status|logs|open|build} [-f|--foreground] [-n|--no-browser]"
     echo ""
     echo "Commands:"
-    echo "  start       Launch KV-Tidal in background (daemon mode)"
+    echo "  start       Launch KV-Tidal (or bring up browser if already running)"
     echo "  start -f    Launch KV-Tidal in foreground (interactive output)"
     echo "  stop        Gracefully stop running server"
     echo "  restart     Stop and restart server"
+    echo "  open        Open Web Dashboard in default browser"
     echo "  status      Display server status, memory usage, and URLs"
     echo "  logs        Stream real-time server logs"
     echo "  build       Recompile frontend static assets and backend release binary"
     ;;
   *)
     echo -e "${RED}Unknown command: $COMMAND${NC}"
-    echo "Usage: $0 {start|stop|restart|status|logs|build} [-f]"
+    echo "Usage: $0 {start|stop|restart|status|logs|open|build} [-f] [-n]"
     exit 1
     ;;
 esac
+

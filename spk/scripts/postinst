@@ -32,8 +32,10 @@ else
 fi
 
 PORT="${wizard_port:-${SYNOPKG_PKG_VAR_wizard_port:-${SYNOPKG_PKG_VAR_port:-26784}}}"
-SUB_USER="${wizard_sub_user:-${SYNOPKG_PKG_VAR_wizard_sub_user:-${SYNOPKG_PKG_VAR_subsonic_user:-admin}}}"
-SUB_PASS="${wizard_sub_pass:-${SYNOPKG_PKG_VAR_wizard_sub_pass:-${SYNOPKG_PKG_VAR_subsonic_pass:-admin}}}"
+WIZARD_SUB_USER="${wizard_sub_user:-${SYNOPKG_PKG_VAR_wizard_sub_user:-${SYNOPKG_PKG_VAR_subsonic_user:-}}}"
+WIZARD_SUB_PASS="${wizard_sub_pass:-${SYNOPKG_PKG_VAR_wizard_sub_pass:-${SYNOPKG_PKG_VAR_subsonic_pass:-}}}"
+SUB_USER="${WIZARD_SUB_USER:-admin}"
+SUB_PASS="${WIZARD_SUB_PASS:-admin}"
 WIZARD_SLSK_USER="${wizard_slsk_user:-${SYNOPKG_PKG_VAR_wizard_slsk_user:-}}"
 WIZARD_SLSK_PASS="${wizard_slsk_pass:-${SYNOPKG_PKG_VAR_wizard_slsk_pass:-}}"
 
@@ -43,15 +45,24 @@ SLSKD_CFG="${SLSKD_DIR}/slskd.yml"
 
 EXISTING_USER=""
 EXISTING_PASS=""
-if [ -f "/volume2/docker/slskd/slskd.yml" ]; then
-    EXISTING_USER="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
-    EXISTING_PASS="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+# 1. Primary source: check existing active package config.json
+if [ -f "$CONFIG_FILE" ]; then
+    EXISTING_USER="$(grep -oE '"soulseek_username":[[:space:]]*"[^"]+"' "$CONFIG_FILE" | sed -E 's/.*"([^"]+)"/\1/' | head -n 1)"
+    EXISTING_PASS="$(grep -oE '"soulseek_password":[[:space:]]*"[^"]+"' "$CONFIG_FILE" | sed -E 's/.*"([^"]+)"/\1/' | head -n 1)"
+fi
+# 2. Secondary source: check existing active slskd.yml
+if [ -z "$EXISTING_USER" ] && [ -f "$SLSKD_CFG" ]; then
+    EXISTING_USER="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
 fi
 if [ -z "$EXISTING_PASS" ] && [ -f "$SLSKD_CFG" ]; then
     EXISTING_PASS="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
 fi
-if [ -z "$EXISTING_USER" ] && [ -f "$SLSKD_CFG" ]; then
-    EXISTING_USER="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+# 3. Fallback source: external docker container if present
+if [ -z "$EXISTING_USER" ] && [ -f "/volume2/docker/slskd/slskd.yml" ]; then
+    EXISTING_USER="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+fi
+if [ -z "$EXISTING_PASS" ] && [ -f "/volume2/docker/slskd/slskd.yml" ]; then
+    EXISTING_PASS="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
 fi
 
 FINAL_SLSK_USER="${WIZARD_SLSK_USER:-$EXISTING_USER}"
@@ -88,11 +99,11 @@ else
   if [ -n "$PORT" ]; then
     sed -i -E "s/\"port\":[[:space:]]*[0-9]+/\"port\": ${PORT}/" "$CONFIG_FILE"
   fi
-  if [ -n "$SUB_USER" ]; then
-    sed -i -E "s/\"subsonic_user\":[[:space:]]*\"[^\"]*\"/\"subsonic_user\": \"${SUB_USER}\"/" "$CONFIG_FILE"
+  if [ -n "$WIZARD_SUB_USER" ]; then
+    sed -i -E "s/\"subsonic_user\":[[:space:]]*\"[^\"]*\"/\"subsonic_user\": \"${WIZARD_SUB_USER}\"/" "$CONFIG_FILE"
   fi
-  if [ -n "$SUB_PASS" ]; then
-    sed -i -E "s/\"subsonic_password\":[[:space:]]*\"[^\"]*\"/\"subsonic_password\": \"${SUB_PASS}\"/" "$CONFIG_FILE"
+  if [ -n "$WIZARD_SUB_PASS" ]; then
+    sed -i -E "s/\"subsonic_password\":[[:space:]]*\"[^\"]*\"/\"subsonic_password\": \"${WIZARD_SUB_PASS}\"/" "$CONFIG_FILE"
   fi
   if [ -n "$MUSIC_DIR" ]; then
     sed -i -E "s|\"download_dir\":[[:space:]]*\"[^\"]*\"|\"download_dir\": \"${MUSIC_DIR}\"|" "$CONFIG_FILE"
@@ -178,7 +189,7 @@ soulseek:
 SLSKD_EOF
 else
   if [ -n "$MUSIC_DIR" ]; then
-    sed -i -E "s|downloads:.*|downloads: \"${MUSIC_DIR}\"|" "$SLSKD_CFG"
+    sed -i -E "s|^([[:space:]]*)downloads:.*|\1downloads: \"${MUSIC_DIR}\"|" "$SLSKD_CFG"
   fi
   if ! grep -q "shares:" "$SLSKD_CFG"; then
     cat >> "$SLSKD_CFG" << SHARES_EOF
@@ -189,10 +200,10 @@ shares:
 SHARES_EOF
   fi
   if [ -n "$FINAL_SLSK_USER" ]; then
-    sed -i -E "s|username:.*|username: \"${FINAL_SLSK_USER}\"|" "$SLSKD_CFG"
+    sed -i -E "s|^([[:space:]]*)username:.*|\1username: \"${FINAL_SLSK_USER}\"|" "$SLSKD_CFG"
   fi
   if [ -n "$FINAL_SLSK_PASS" ]; then
-    sed -i -E "s|password:.*|password: \"${FINAL_SLSK_PASS}\"|" "$SLSKD_CFG"
+    sed -i -E "s|^([[:space:]]*)password:.*|\1password: \"${FINAL_SLSK_PASS}\"|" "$SLSKD_CFG"
   fi
 fi
 chmod 666 "$SLSKD_CFG" 2>/dev/null || true

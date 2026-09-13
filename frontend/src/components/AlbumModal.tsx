@@ -121,6 +121,8 @@ export function AlbumModal({ isOpen, onClose, album }: AlbumModalProps) {
         source: isLocal ? "local" : "tidal",
         drScore: t.drScore || 13,
         isDsd: t.isDsd,
+        filePath: isLocal && t.streamId?.startsWith("/") ? t.streamId : undefined,
+        fileName: isLocal && t.streamId?.startsWith("/") ? t.streamId.split("/").pop() : undefined,
       };
     });
 
@@ -148,6 +150,8 @@ export function AlbumModal({ isOpen, onClose, album }: AlbumModalProps) {
       source: isLocal ? "local" : "tidal",
       drScore: t.drScore || 13,
       isDsd: t.isDsd,
+      filePath: isLocal && t.streamId?.startsWith("/") ? t.streamId : undefined,
+      fileName: isLocal && t.streamId?.startsWith("/") ? t.streamId.split("/").pop() : undefined,
     });
   };
 

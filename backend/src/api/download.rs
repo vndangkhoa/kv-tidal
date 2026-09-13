@@ -285,8 +285,48 @@ async fn run_download_pipeline(
 
     let mut audio_bytes_opt = None;
 
+    // Priority 0: Check if local library track already exists on disk
+    if let Some(ref tid) = payload.track_id {
+        let lib = state.library.read().await;
+        if let Some(track) = lib.tracks.get(tid) {
+            let p = std::path::Path::new(&track.file_path);
+            if p.exists() {
+                if let Ok(bytes) = tokio::fs::read(p).await {
+                    if bytes.len() >= 1024 {
+                        info!("Track {} is already in local library ({:?}), using local bytes", tid, p);
+                        audio_bytes_opt = Some(bytes);
+                    }
+                }
+            }
+        }
+    }
+
+    if audio_bytes_opt.is_none() {
+        if let Some(ref u) = payload.stream_url {
+            if u.starts_with("/api/stream") {
+                if let Some(id_part) = u.split("id=").nth(1) {
+                    let tid = id_part.split('&').next().unwrap_or("");
+                    if !tid.is_empty() {
+                        let lib = state.library.read().await;
+                        if let Some(track) = lib.tracks.get(tid) {
+                            let p = std::path::Path::new(&track.file_path);
+                            if p.exists() {
+                                if let Ok(bytes) = tokio::fs::read(p).await {
+                                    if bytes.len() >= 1024 {
+                                        info!("Resolved relative stream URL id {} to local file {:?}", tid, p);
+                                        audio_bytes_opt = Some(bytes);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Priority 1: Pure Bit-Perfect Lossless Soulseek P2P Retrieval (Default)
-    {
+    if audio_bytes_opt.is_none() {
         let mut q = state.download_queue.write().await;
         if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
             job.source = Some("soulseek".to_string());
@@ -487,14 +527,15 @@ async fn run_download_pipeline(
 
     // Priority 3: Fallback to Web Stream Audio (Transcode to FLAC)
     if audio_bytes_opt.is_none() && !token.is_cancelled() {
+        let clean_t = crate::engines::soulseek::clean_query_title(&payload.title);
         let stream_url = if let Some(ref u) = payload.stream_url {
-            if !u.trim().is_empty() {
+            if !u.trim().is_empty() && !u.starts_with('/') {
                 Some(u.clone())
             } else {
-                state.resolver.resolve_full_stream(&payload.artist, &payload.title).await
+                state.resolver.resolve_full_stream(&payload.artist, &clean_t).await
             }
         } else {
-            state.resolver.resolve_full_stream(&payload.artist, &payload.title).await
+            state.resolver.resolve_full_stream(&payload.artist, &clean_t).await
         };
 
         if let Some(ref s_url) = stream_url {

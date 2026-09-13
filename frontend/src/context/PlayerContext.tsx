@@ -806,8 +806,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
             const liveSampleRate = res.headers.get("x-audio-sample-rate");
             const liveBitrate = res.headers.get("x-audio-bitrate");
             const liveIsLossless = res.headers.get("x-audio-is-lossless");
+            const liveFileName = res.headers.get("x-audio-file-name");
+            const liveFilePath = res.headers.get("x-audio-file-path");
 
-            if (liveSource || liveFormat) {
+            if (liveSource || liveFormat || liveFileName) {
               setCurrentTrack((prev) => {
                 if (!prev || prev.id !== track.id) return prev;
                 return {
@@ -819,6 +821,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
                   sampleRate: liveSampleRate ? parseInt(liveSampleRate, 10) : prev.sampleRate,
                   bitrate: liveBitrate ? parseInt(liveBitrate, 10) : prev.bitrate,
                   hires: liveIsLossless !== null ? liveIsLossless === "true" : prev.hires,
+                  fileName: liveFileName || prev.fileName,
+                  filePath: liveFilePath || prev.filePath,
                 };
               });
             }
@@ -885,8 +889,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           const liveSampleRate = res.headers.get("x-audio-sample-rate");
           const liveBitrate = res.headers.get("x-audio-bitrate");
           const liveIsLossless = res.headers.get("x-audio-is-lossless");
+          const liveFileName = res.headers.get("x-audio-file-name");
+          const liveFilePath = res.headers.get("x-audio-file-path");
 
-          if (liveSource || liveFormat) {
+          if (liveSource || liveFormat || liveFileName) {
             setCurrentTrack((prev) => {
               if (!prev) return prev;
               return {
@@ -898,6 +904,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
                 sampleRate: liveSampleRate ? parseInt(liveSampleRate, 10) : prev.sampleRate,
                 bitrate: liveBitrate ? parseInt(liveBitrate, 10) : prev.bitrate,
                 hires: liveIsLossless !== null ? liveIsLossless === "true" : prev.hires,
+                fileName: liveFileName || prev.fileName,
+                filePath: liveFilePath || prev.filePath,
               };
             });
           }

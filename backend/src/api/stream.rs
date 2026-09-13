@@ -379,6 +379,17 @@ async fn handle_stream(
                         headers.insert("x-audio-dr-score", dr.to_string().parse().unwrap());
                     }
                     headers.insert("x-audio-is-dsd", (if is_dsd { "true" } else { "false" }).parse().unwrap());
+
+                    let file_name = track.file_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                    let file_path_str = track.file_path.to_string_lossy();
+                    if let Ok(val) = file_name.parse() {
+                        headers.insert("x-audio-file-name", val);
+                    }
+                    if let Ok(val) = file_path_str.parse() {
+                        headers.insert("x-audio-file-path", val);
+                    }
+                    headers.insert("x-audio-is-lossless", "true".parse().unwrap());
+
                     return res;
                 }
             }
@@ -543,7 +554,8 @@ pub async fn proxy_stream_with_meta(
                 .header(axum::http::header::ACCESS_CONTROL_EXPOSE_HEADERS, "*")
                 .header("x-audio-source", source)
                 .header("x-audio-format", format)
-                .header("x-audio-is-lossless", if is_lossless { "true" } else { "false" });
+                .header("x-audio-is-lossless", if is_lossless { "true" } else { "false" })
+                .header("x-audio-file-name", if is_lossless { "Tidal Master Stream" } else { "Online Web Stream (Opus 160k)" });
 
             if let Some(bd) = bit_depth {
                 builder = builder.header("x-audio-bit-depth", bd.to_string());

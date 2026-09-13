@@ -185,18 +185,20 @@ export default function SettingsPage() {
           soulseek_password: soulseekPassword ? soulseekPassword : undefined,
         }),
       });
-      if (resp.ok) {
-        const testResp = await fetch("/api/settings/test-soulseek", { method: "POST" });
-        const testData = await testResp.json();
-        setSoulseekStatusMsg({
-          success: testData.success,
-          text: testData.message,
-          version: testData.version,
-        });
-        fetchSettings();
-        setSoulseekApiKey("");
-        setSoulseekPassword("");
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`Failed to save settings: ${errText || `HTTP ${resp.status}`}`);
       }
+      const testResp = await fetch("/api/settings/test-soulseek", { method: "POST" });
+      const testData = await testResp.json();
+      setSoulseekStatusMsg({
+        success: testData.success,
+        text: testData.message,
+        version: testData.version,
+      });
+      fetchSettings();
+      setSoulseekApiKey("");
+      setSoulseekPassword("");
     } catch (e: any) {
       setSoulseekStatusMsg({ success: false, text: e.message || "Failed saving Soulseek settings" });
     } finally {

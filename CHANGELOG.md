@@ -4,7 +4,14 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
-## [1.0.0-26] - 2026-09-13
+## [1.0.0-27] - 2026-09-13
+
+### Added & Improved
+- **Smart Query Title Sanitization for Soulseek**: Strips leading track index prefixes (e.g. `17 - `, `01. `) and parenthetical metadata tags (`(Bonus Track)`, `[Explicit]`, `[Deluxe]`, `(Remastered 2021)`) before executing Soulseek searches, drastically improving FLAC match accuracy and hit rates.
+- **Dynamic slskd Daemon Reconfiguration**: Auto-synchronizes `slskd.yml` without locks deadlock when settings update, and automatically reboots the native `slskd` process when Soulseek credentials change to immediately authenticate with updated credentials.
+- **Live Stream Track & File Provenance**: Forwarded `x-audio-file-name`, `x-audio-file-path`, and lossless indicators in stream responses, displaying active playing file paths in the player bar tooltip and dynamic status dots (cyan for bit-perfect FLAC, amber for Opus).
+- **DSM Upgrade Wizard Credential Preservation**: Upgraded `upgrade_uifile`, `postinst`, and `postupgrade` to preserve existing admin passwords and Soulseek credentials from active configuration without requiring re-entry during DSM package upgrades.
+- **CLI Management Enhancements**: Added `open` command and `-n` / `--no-browser` flags to `launch.sh`, automatically launching the web dashboard in default browser on service startup.
 
 ### Added & Improved
 - **Guaranteed Bit-Perfect FLAC for Local Tracks**: Player engine now strictly preserves lossless bit-perfect FLAC streaming for all local NAS library tracks (`track.source === "local"` or local filesystem paths), preventing unintended transcoding to Opus.

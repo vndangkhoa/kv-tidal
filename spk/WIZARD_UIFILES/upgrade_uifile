@@ -50,10 +50,10 @@
         "subitems": [
           {
             "key": "wizard_sub_pass",
-            "desc": "Admin password",
-            "defaultValue": "admin",
+            "desc": "Admin password (leave blank to keep current password)",
+            "defaultValue": "",
             "validator": {
-              "allowBlank": false
+              "allowBlank": true
             }
           }
         ]
