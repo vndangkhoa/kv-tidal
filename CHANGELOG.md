@@ -4,6 +4,24 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-24] - 2026-09-13
+
+### Added & Improved
+- **Intelligent Soulseek Candidate Scoring Algorithm**: Implemented a comprehensive scoring engine evaluating track duration matching (±5s tolerance bonus, divergence penalties), negative keyword filtering (`karaoke`, `instrumental`, `remix`, `live`, `cover`, `demo` filtered out when not in track title), peer upload speed metrics, and free upload slot prioritization to ensure the highest-quality studio FLAC download.
+- **Full Download Lifecycle Controls**: Added real-time Pause, Resume, and Cancel/Remove actions with bidirectional state synchronization with `slskd` P2P transfers.
+- **Synology DSM Setup Wizard Integration**: Added `WIZARD_UIFILES` (`install_uifile` and `upgrade_uifile`) enabling interactive configuration of Soulseek credentials, listening ports, and download shares directly during DSM Package Center installation and upgrade.
+- **Categorized Audiophile Settings Navigation**: Added quick-switch category navigation pills (All, Audio Devices, Engine & DAC, Tidal & P2P, NAS & Shares, Subsonic & Apps) for intuitive, organized settings management.
+- **Mobile Files Page Bottom-Sheet Actions**: Added responsive mobile action sheet for streamlined single-touch file management, renaming, audio playback, and path inspection on mobile viewports.
+- **Progressive Web App (PWA) & MediaSession Integration**: Added Service Worker registration (`sw.js`) and MediaSession API integration for native system lockscreen audio controls, artwork sync, and track scrubbing across desktop and mobile devices.
+- **Daemon Launch & Supervision Resilience**: Hardened `launch.sh` with robust PID validation, process status verification, and clean multi-daemon lifecycle management.
+
+## [1.0.0-23] - 2026-09-13
+
+### Fixed & Improved
+- **Studio Audio Suite Popover Layering**: Fixed z-index layering and backdrop dismiss handling for the bottom audio player popover tools.
+- **Soulseek Query DMCA Bypass**: Enhanced query normalization to bypass restricted search terms while matching accurate releases.
+- **Persistent Settings Credentials**: Ensured secure synchronization and persistence of Tidal and Soulseek configuration parameters.
+
 ## [1.0.0-22] - 2026-09-13
 
 ### Added & Improved

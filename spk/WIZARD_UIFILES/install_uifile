@@ -59,5 +59,38 @@
         ]
       }
     ]
+  },
+  {
+    "step_title": "Soulseek (slskd) Lossless FLAC Engine",
+    "items": [
+      {
+        "type": "textfield",
+        "desc": "Soulseek Account Username (100% Free P2P — enter any username to auto-register or log in):",
+        "subitems": [
+          {
+            "key": "wizard_slsk_user",
+            "desc": "Soulseek username (optional, e.g. syno_music — leave blank to configure later)",
+            "defaultValue": "",
+            "validator": {
+              "allowBlank": true
+            }
+          }
+        ]
+      },
+      {
+        "type": "password",
+        "desc": "Soulseek Account Password:",
+        "subitems": [
+          {
+            "key": "wizard_slsk_pass",
+            "desc": "Soulseek password (leave blank to configure later)",
+            "defaultValue": "",
+            "validator": {
+              "allowBlank": true
+            }
+          }
+        ]
+      }
+    ]
   }
 ]

@@ -314,7 +314,8 @@ export type DownloadStage =
   | "tagging_and_writing"
   | "indexing_library"
   | "completed"
-  | "failed";
+  | "failed"
+  | "paused";
 
 export interface DownloadJob {
   id: string;
@@ -323,10 +324,13 @@ export interface DownloadJob {
   album: string;
   track_number?: number;
   year?: number;
+  duration?: number;
   cover_url?: string;
   stream_url?: string;
   track_id?: string;
   source?: string;
+  slskd_username?: string;
+  slskd_id?: string;
   stage: DownloadStage;
   progress_percent: number;
   downloaded_bytes: number;

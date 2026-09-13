@@ -23,6 +23,12 @@ import {
   AutoEqPreset,
 } from "@/types";
 import { VuTheme } from "@/components/VuMeterModal";
+import {
+  updateMediaSessionMetadata,
+  updateMediaSessionPlaybackState,
+  syncMediaPositionState,
+  registerMediaSessionActions,
+} from "@/utils/mediaSession";
 
 export const EQ_FREQUENCIES = [31, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
@@ -1474,9 +1480,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     activeAutoEqPreset,
   ]);
 
-  // Ref for playNext callback to avoid re-triggering audio element setup
+  // Refs for media controls to avoid re-triggering audio element setup
   const playNextRef = useRef<() => void>(() => {});
   playNextRef.current = playNext;
+
+  const playPreviousRef = useRef<() => void>(() => {});
+  playPreviousRef.current = playPrevious;
+
+  const togglePlayRef = useRef<() => void>(() => {});
+  togglePlayRef.current = togglePlay;
+
+  const seekRef = useRef<(seconds: number) => void>(() => {});
+  seekRef.current = seek;
+
+  const lastPosSyncRef = useRef<number>(0);
 
   // Main Audio setup & gapless pre-buffer listener (mounted once for application lifetime)
   useEffect(() => {
@@ -1489,6 +1506,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       audioRef.current = audio;
       preBufferAudioRef.current = preBufferAudio;
 
+      // Register OS Lock-Screen / Notification Media Controls (Android & iOS)
+      registerMediaSessionActions(audio, {
+        onPlay: () => togglePlayRef.current(),
+        onPause: () => togglePlayRef.current(),
+        onNext: () => playNextRef.current(),
+        onPrevious: () => playPreviousRef.current(),
+        onSeek: (seconds) => seekRef.current(seconds),
+      });
+
       audio.addEventListener("error", () => {
         const err = audio.error;
         if (!err || err.code === 1) {
@@ -1497,10 +1523,18 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
         console.warn("Audio element error:", err.code, err.message);
         setIsPlaying(false);
+        updateMediaSessionPlaybackState(false);
       });
 
       audio.addEventListener("timeupdate", () => {
         setProgress(audio.currentTime);
+
+        // Periodically sync lock-screen scrubber position
+        const now = Date.now();
+        if (now - lastPosSyncRef.current > 750) {
+          lastPosSyncRef.current = now;
+          syncMediaPositionState(audio);
+        }
 
         // Pre-fetch next track when 15 seconds remain for 0ms gapless transition
         if (audio.duration && audio.duration - audio.currentTime < 15) {
@@ -1518,14 +1552,28 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       audio.addEventListener("loadedmetadata", () => {
         setDuration(audio.duration || 0);
+        syncMediaPositionState(audio);
+      });
+
+      audio.addEventListener("seeked", () => {
+        syncMediaPositionState(audio);
       });
 
       audio.addEventListener("ended", () => {
         playNextRef.current();
       });
 
-      audio.addEventListener("play", () => setIsPlaying(true));
-      audio.addEventListener("pause", () => setIsPlaying(false));
+      audio.addEventListener("play", () => {
+        setIsPlaying(true);
+        updateMediaSessionPlaybackState(true);
+        syncMediaPositionState(audio);
+      });
+
+      audio.addEventListener("pause", () => {
+        setIsPlaying(false);
+        updateMediaSessionPlaybackState(false);
+        syncMediaPositionState(audio);
+      });
 
       return () => {
         audio.pause();
@@ -1538,6 +1586,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       };
     }
   }, []);
+
+  // Sync Media Session Lock-Screen metadata whenever current track changes
+  useEffect(() => {
+    updateMediaSessionMetadata(currentTrack);
+    if (audioRef.current) {
+      syncMediaPositionState(audioRef.current);
+    }
+  }, [currentTrack]);
 
   return (
     <PlayerContext.Provider

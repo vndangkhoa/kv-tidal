@@ -44,6 +44,7 @@ import {
   Columns2,
   ArrowRightLeft,
   FolderOpen,
+  MoreVertical,
 } from "lucide-react";
 import {
   FileContextMenu,
@@ -85,6 +86,10 @@ export default function FilesPage() {
     position: ContextMenuPosition;
     target: ContextMenuTarget;
   } | null>(null);
+
+  // Mobile Bottom Sheet Action State
+  const [mobileActionEntry, setMobileActionEntry] = useState<FsEntry | null>(null);
+  const [mobileActionMenuOpen, setMobileActionMenuOpen] = useState<boolean>(false);
 
   // Split View (Dual-Pane) State
   const [activePane, setActivePane] = useState<"left" | "right">("left");
@@ -202,8 +207,11 @@ export default function FilesPage() {
   };
 
   useEffect(() => {
+    const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
     const saved = localStorage.getItem("kvtidal_files_view_mode");
-    if (saved === "list" || saved === "columns" || saved === "split") {
+    if (isMobile) {
+      setViewMode("list");
+    } else if (saved === "list" || saved === "columns" || saved === "split") {
       setViewMode(saved as any);
       if (saved === "split") {
         loadPaneBDirectory();
@@ -1101,7 +1109,7 @@ export default function FilesPage() {
 
   return (
     <div
-      className="space-y-6 pb-24 relative min-h-screen"
+      className="space-y-6 pb-44 md:pb-24 relative min-h-screen"
       onDragOver={(e) => {
         e.preventDefault();
         setIsDragOver(true);
@@ -1204,12 +1212,13 @@ export default function FilesPage() {
             ) : (
               <UploadCloud className="w-4 h-4 text-emerald-400" />
             )}
-            <span>{isUploading ? "Uploading..." : "Upload Files"}</span>
+            <span>{isUploading ? "Uploading..." : "Upload"}</span>
           </button>
           <input
             ref={fileInputRef}
             type="file"
             multiple
+            accept="audio/*,.flac,.dsf,.dff,.wav,.mp3,.m4a,.aac,.ogg,.iso"
             className="hidden"
             onChange={(e) => {
               if (e.target.files) {
@@ -1228,13 +1237,13 @@ export default function FilesPage() {
             title="Play all tracks in current folder"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Play Folder</span>
+            <span className="hidden xs:inline">Play Folder</span>
           </button>
 
           {/* Queue Folder */}
           <button
             onClick={handleQueueFolder}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-textPrimary border border-border text-xs font-medium transition-colors cursor-pointer"
+            className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-textPrimary border border-border text-xs font-medium transition-colors cursor-pointer"
             title="Add all tracks in folder to active playback queue"
           >
             <ListPlus className="w-4 h-4 text-textSecondary" />
@@ -1253,24 +1262,24 @@ export default function FilesPage() {
             ) : (
               <FolderSync className="w-3.5 h-3.5" />
             )}
-            <span>{isScanning ? "Scanning..." : "Scan to Library"}</span>
+            <span className="hidden xs:inline">{isScanning ? "Scanning..." : "Scan"}</span>
           </button>
 
-          {/* Auto-Organize Files */}
+          {/* Auto-Organize Files (Desktop only) */}
           <button
             onClick={() => setOrganizeModalOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-purple-300 hover:text-purple-200 border border-purple-500/30 text-xs font-medium transition-colors cursor-pointer"
+            className="hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-purple-300 hover:text-purple-200 border border-purple-500/30 text-xs font-medium transition-colors cursor-pointer"
             title="Auto-organize files by metadata tags"
           >
             <FolderTree className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Auto-Organize</span>
+            <span>Auto-Organize</span>
           </button>
         </div>
 
         {/* Center/Right: View Switcher + Search Filter & Refresh */}
         <div className="flex items-center space-x-2 w-full sm:w-auto">
-          {/* View Mode Switcher (Columns vs List) */}
-          <div className="flex items-center bg-card border border-border rounded-lg p-0.5 text-xs">
+          {/* View Mode Switcher (Columns vs List) - Desktop only */}
+          <div className="hidden md:flex items-center bg-card border border-border rounded-lg p-0.5 text-xs">
             <button
               onClick={() => {
                 setViewMode("columns");
@@ -1900,62 +1909,67 @@ export default function FilesPage() {
                               entry.is_dir
                                 ? "text-textPrimary hover:text-primary font-medium"
                                 : entry.format
-                                ? "text-textPrimary hover:text-primary"
+                                ? "text-textPrimary hover:text-primary font-medium"
                                 : "text-textPrimary"
                             }`}
                           >
                             {entry.name}
                           </span>
                         </div>
-                        {entry.artist && entry.album && (
-                          <span className="text-[11px] text-textSecondary truncate">
-                            {entry.artist} • {entry.album}
-                          </span>
-                        )}
-                      </div>
 
-                      {/* Hi-Res Badges */}
-                      {entry.format?.toLowerCase() === "dsf" || entry.format?.toLowerCase() === "dff" ? (
-                        <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40 rounded flex-shrink-0 flex items-center space-x-0.5 shadow-sm">
-                          <Sparkles className="w-2.5 h-2.5 mr-0.5" />
-                          <span>DSD DIRECT</span>
-                        </span>
-                      ) : entry.hires ? (
-                        <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded flex-shrink-0 flex items-center space-x-0.5 shadow-sm">
-                          <Sparkles className="w-2.5 h-2.5 mr-0.5" />
-                          <span>
-                            {entry.bit_depth || 24}B/
-                            {entry.sample_rate ? Math.round(entry.sample_rate / 1000) : 96}k{" "}
-                            {entry.format || "FLAC"}
-                          </span>
-                        </span>
-                      ) : entry.format === "FLAC" || entry.format === "WAV" || entry.format === "ALAC" ? (
-                        <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded flex-shrink-0 shadow-sm">
-                          {entry.bit_depth || 16}B/
-                          {entry.sample_rate ? (entry.sample_rate / 1000).toFixed(1) : "44.1"}k CD
-                        </span>
-                      ) : entry.format ? (
-                        <span className="px-1.5 py-0.5 text-[9px] font-mono font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded flex-shrink-0 shadow-sm">
-                          {entry.format} AUDIO
-                        </span>
-                      ) : null}
+                        <div className="flex items-center space-x-1.5 mt-0.5 truncate text-[11px] text-textSecondary">
+                          {/* Hi-Res Badges inside subtitle */}
+                          {entry.format?.toLowerCase() === "dsf" || entry.format?.toLowerCase() === "dff" ? (
+                            <span className="px-1.5 py-0.2 text-[8px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40 rounded flex-shrink-0 flex items-center space-x-0.5 shadow-sm">
+                              <Sparkles className="w-2.5 h-2.5 mr-0.5" />
+                              <span>DSD DIRECT</span>
+                            </span>
+                          ) : entry.hires ? (
+                            <span className="px-1.5 py-0.2 text-[8px] font-mono font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded flex-shrink-0 flex items-center space-x-0.5 shadow-sm">
+                              <Sparkles className="w-2.5 h-2.5 mr-0.5" />
+                              <span>
+                                {entry.bit_depth || 24}B/
+                                {entry.sample_rate ? Math.round(entry.sample_rate / 1000) : 96}k{" "}
+                                {entry.format || "FLAC"}
+                              </span>
+                            </span>
+                          ) : entry.format === "FLAC" || entry.format === "WAV" || entry.format === "ALAC" ? (
+                            <span className="px-1.5 py-0.2 text-[8px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded flex-shrink-0 shadow-sm">
+                              {entry.bit_depth || 16}B/
+                              {entry.sample_rate ? (entry.sample_rate / 1000).toFixed(1) : "44.1"}k CD
+                            </span>
+                          ) : entry.format ? (
+                            <span className="px-1.5 py-0.2 text-[8px] font-mono font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded flex-shrink-0 shadow-sm">
+                              {entry.format}
+                            </span>
+                          ) : null}
+
+                          {entry.artist && entry.album ? (
+                            <span className="truncate">
+                              {entry.artist} • {entry.album}
+                            </span>
+                          ) : entry.artist ? (
+                            <span className="truncate">{entry.artist}</span>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
                   {/* Right: Date, Size & Action Buttons */}
-                  <div className="flex items-center space-x-3 flex-shrink-0 font-mono text-xs text-textSecondary">
+                  <div className="flex items-center space-x-2 sm:space-x-3 flex-shrink-0 font-mono text-xs text-textSecondary">
                     {/* Date Modified */}
                     <span className="hidden md:inline text-[11px] text-textSecondary/70 w-24 text-right">
                       {formatDate(entry.modified_at)}
                     </span>
 
                     {/* Size */}
-                    <span className="w-16 text-right">
+                    <span className="w-14 sm:w-16 text-right text-[11px] sm:text-xs">
                       {entry.is_dir ? "Folder" : formatSize(entry.size_bytes)}
                     </span>
 
-                    {/* Actions Menu */}
-                    <div className="flex items-center space-x-1">
+                    {/* Desktop Actions Menu (Hidden on Mobile) */}
+                    <div className="hidden md:flex items-center space-x-1">
                       {/* Audio Play Direct */}
                       {entry.format && (
                         <button
@@ -2034,6 +2048,19 @@ export default function FilesPage() {
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
+
+                    {/* Mobile More Options Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMobileActionEntry(entry);
+                        setMobileActionMenuOpen(true);
+                      }}
+                      className="md:hidden p-1.5 -mr-1 rounded-lg text-textSecondary hover:text-white active:bg-cardHover transition-colors cursor-pointer"
+                      title="File actions"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               );
@@ -2591,22 +2618,22 @@ export default function FilesPage() {
       {/* Floating Multi-Select Action Bar */}
       {selectedPaths.size > 0 && (
         <div
-          className={`fixed left-1/2 -translate-x-1/2 z-50 bg-surface/95 backdrop-blur-md border border-primary/40 rounded-2xl shadow-2xl px-5 py-3 flex items-center space-x-4 animate-in slide-in-from-bottom-5 transition-all duration-200 ${
+          className={`fixed left-1/2 -translate-x-1/2 z-50 bg-surface/95 backdrop-blur-md border border-primary/40 rounded-2xl shadow-2xl px-3.5 py-2 md:px-5 md:py-3 flex items-center space-x-2 md:space-x-4 max-w-[calc(100vw-1.5rem)] overflow-x-auto no-scrollbar animate-in slide-in-from-bottom-5 transition-all duration-200 ${
             Boolean(currentTrack)
               ? clipboard
-                ? "bottom-[152px] md:bottom-[152px]"
-                : "bottom-[92px] md:bottom-[92px]"
+                ? "bottom-[180px] md:bottom-[152px]"
+                : "bottom-[128px] md:bottom-[92px]"
               : clipboard
-              ? "bottom-[80px] md:bottom-[72px]"
+              ? "bottom-[132px] md:bottom-[72px]"
               : "bottom-20 md:bottom-6"
           }`}
         >
-          <div className="text-xs font-mono">
+          <div className="text-xs font-mono flex-shrink-0">
             <span className="text-primary font-bold">{selectedPaths.size}</span>
             <span className="text-textSecondary"> selected ({formatSize(selectedTotalBytes)})</span>
           </div>
 
-          <div className="h-4 w-[1px] bg-border" />
+          <div className="h-4 w-[1px] bg-border flex-shrink-0" />
 
           {/* Play Selected */}
           <button
@@ -2619,7 +2646,7 @@ export default function FilesPage() {
               playTrack(tracks[0], tracks);
               showNotification(`Playing ${tracks.length} selected tracks`);
             }}
-            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-primary text-black text-xs font-bold transition-transform hover:scale-105 cursor-pointer"
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-primary text-black text-xs font-bold transition-transform hover:scale-105 cursor-pointer flex-shrink-0"
           >
             <Play className="w-3 h-3 fill-current" />
             <span>Play</span>
@@ -2636,7 +2663,7 @@ export default function FilesPage() {
               addAllToQueue(tracks);
               showNotification(`Added ${tracks.length} tracks to queue`);
             }}
-            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-textPrimary text-xs font-medium border border-border cursor-pointer"
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-textPrimary text-xs font-medium border border-border cursor-pointer flex-shrink-0"
           >
             <ListPlus className="w-3.5 h-3.5" />
             <span>Queue</span>
@@ -2647,7 +2674,7 @@ export default function FilesPage() {
             onClick={() =>
               handleCut(activePane === "left" ? selectedEntries : paneBSelectedEntries)
             }
-            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-amber-300 border border-amber-500/30 text-xs font-medium cursor-pointer"
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-amber-300 border border-amber-500/30 text-xs font-medium cursor-pointer flex-shrink-0"
             title="Cut selected items (Ctrl+X)"
           >
             <Scissors className="w-3.5 h-3.5 text-amber-400" />
@@ -2659,7 +2686,7 @@ export default function FilesPage() {
             onClick={() =>
               handleCopy(activePane === "left" ? selectedEntries : paneBSelectedEntries)
             }
-            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-sky-300 border border-sky-500/30 text-xs font-medium cursor-pointer"
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-sky-300 border border-sky-500/30 text-xs font-medium cursor-pointer flex-shrink-0"
             title="Copy selected items (Ctrl+C)"
           >
             <Copy className="w-3.5 h-3.5 text-sky-400" />
@@ -2675,7 +2702,7 @@ export default function FilesPage() {
                     activePane === "left" ? "toRight" : "toLeft"
                   )
                 }
-                className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-sky-300 border border-sky-500/30 text-xs font-medium cursor-pointer"
+                className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-sky-300 border border-sky-500/30 text-xs font-medium cursor-pointer flex-shrink-0"
                 title={`Copy to ${activePane === "left" ? "Right" : "Left"} Pane`}
               >
                 <ArrowRightLeft className="w-3.5 h-3.5 text-sky-400" />
@@ -2688,7 +2715,7 @@ export default function FilesPage() {
                     activePane === "left" ? "toRight" : "toLeft"
                   )
                 }
-                className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-amber-300 border border-amber-500/30 text-xs font-medium cursor-pointer"
+                className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover text-amber-300 border border-amber-500/30 text-xs font-medium cursor-pointer flex-shrink-0"
                 title={`Move to ${activePane === "left" ? "Right" : "Left"} Pane`}
               >
                 <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />
@@ -2700,7 +2727,7 @@ export default function FilesPage() {
           {/* Batch Delete */}
           <button
             onClick={() => setDeleteConfirmPaths(Array.from(selectedPaths))}
-            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 text-xs font-semibold cursor-pointer"
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 text-xs font-semibold cursor-pointer flex-shrink-0"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Delete</span>
@@ -2712,7 +2739,7 @@ export default function FilesPage() {
               if (activePane === "left") setSelectedPaths(new Set());
               else setPaneBSelectedPaths(new Set());
             }}
-            className="p-1 rounded-lg hover:bg-card text-textSecondary hover:text-white"
+            className="p-1 rounded-lg hover:bg-card text-textSecondary hover:text-white flex-shrink-0"
             title="Clear selection"
           >
             <X className="w-4 h-4" />
@@ -2723,9 +2750,9 @@ export default function FilesPage() {
       {/* Floating Clipboard Dock */}
       {clipboard && (
         <div
-          className={`fixed left-1/2 -translate-x-1/2 z-50 bg-surface/95 backdrop-blur-xl border border-primary/50 px-4 py-2 rounded-2xl shadow-2xl flex items-center space-x-3 text-xs font-mono animate-in slide-in-from-bottom-3 transition-all duration-200 ${
+          className={`fixed left-1/2 -translate-x-1/2 z-50 bg-surface/95 backdrop-blur-xl border border-primary/50 px-4 py-2 rounded-2xl shadow-2xl flex items-center space-x-3 text-xs font-mono max-w-[calc(100vw-1.5rem)] overflow-x-auto no-scrollbar animate-in slide-in-from-bottom-3 transition-all duration-200 ${
             Boolean(currentTrack)
-              ? "bottom-[92px] md:bottom-[92px]"
+              ? "bottom-[128px] md:bottom-[92px]"
               : "bottom-20 md:bottom-6"
           }`}
         >
@@ -3372,6 +3399,236 @@ export default function FilesPage() {
         }
         oppositePaneName={activePane === "left" ? "Right Pane" : "Left Pane"}
       />
+
+      {/* Mobile File Action Bottom Sheet */}
+      {mobileActionMenuOpen && mobileActionEntry && (
+        <div
+          onClick={() => {
+            setMobileActionMenuOpen(false);
+            setMobileActionEntry(null);
+          }}
+          className="md:hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-surface border-t border-border rounded-t-2xl p-5 pb-safe space-y-4 max-w-lg mx-auto w-full shadow-2xl animate-in slide-in-from-bottom-4 duration-200 max-h-[85vh] overflow-y-auto"
+          >
+            {/* Drag Handle */}
+            <div className="w-10 h-1 bg-white/20 rounded-full mx-auto -mt-1 mb-2" />
+
+            {/* Header: Icon + Name + Details */}
+            <div className="flex items-start justify-between border-b border-border/60 pb-3">
+              <div className="flex items-start space-x-3 min-w-0 flex-1">
+                <div className="p-2.5 rounded-xl bg-card border border-border flex-shrink-0 mt-0.5">
+                  {mobileActionEntry.is_dir ? (
+                    <Folder className="w-6 h-6 text-primary" />
+                  ) : mobileActionEntry.format ? (
+                    <FileAudio className="w-6 h-6 text-accent" />
+                  ) : (
+                    <File className="w-6 h-6 text-textSecondary" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-bold text-white break-words" title={mobileActionEntry.name}>
+                    {mobileActionEntry.name}
+                  </h3>
+                  <div className="text-xs text-textSecondary mt-0.5 space-y-0.5">
+                    {mobileActionEntry.artist && (
+                      <p className="truncate text-white/90">
+                        {mobileActionEntry.artist} {mobileActionEntry.album ? `• ${mobileActionEntry.album}` : ""}
+                      </p>
+                    )}
+                    <p className="font-mono text-[11px] text-textSecondary/80">
+                      {mobileActionEntry.is_dir ? "Folder" : formatSize(mobileActionEntry.size_bytes)} • {formatDate(mobileActionEntry.modified_at)}
+                    </p>
+                    {mobileActionEntry.format && (
+                      <div className="flex items-center space-x-1.5 pt-1">
+                        <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-primary/15 text-primary border border-primary/30">
+                          {mobileActionEntry.bit_depth ? `${mobileActionEntry.bit_depth}B/` : ""}
+                          {mobileActionEntry.sample_rate ? `${(mobileActionEntry.sample_rate / 1000).toFixed(1)}k ` : ""}
+                          {mobileActionEntry.format}
+                        </span>
+                        {mobileActionEntry.hires && (
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                            HI-RES MASTER
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setMobileActionMenuOpen(false);
+                  setMobileActionEntry(null);
+                }}
+                className="p-2 text-textSecondary hover:text-white rounded-full cursor-pointer ml-2"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Actions List with 48px touch targets */}
+            <div className="divide-y divide-border/50 text-sm font-medium">
+              {/* If Audio File */}
+              {mobileActionEntry.format && (
+                <>
+                  <button
+                    onClick={() => {
+                      handlePlayDirect(mobileActionEntry, false);
+                      setMobileActionMenuOpen(false);
+                    }}
+                    className="w-full py-3 flex items-center space-x-3 text-white hover:text-primary transition-colors cursor-pointer text-left"
+                  >
+                    <Play className="w-5 h-5 text-primary fill-current" />
+                    <span>Play Bit-Perfect (Browser)</span>
+                  </button>
+
+                  {activeDeviceId !== "browser" && (
+                    <button
+                      onClick={() => {
+                        handlePlayDirect(mobileActionEntry, true);
+                        setMobileActionMenuOpen(false);
+                      }}
+                      className="w-full py-3 flex items-center space-x-3 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer text-left"
+                    >
+                      <Speaker className="w-5 h-5 text-emerald-400" />
+                      <span>Stream to Host USB DAC</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      const track = getAudioTracks([mobileActionEntry]);
+                      if (track.length > 0) {
+                        addAllToQueue(track);
+                        showNotification(`Added ${track[0].title} to queue`);
+                      }
+                      setMobileActionMenuOpen(false);
+                    }}
+                    className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
+                  >
+                    <ListPlus className="w-5 h-5 text-primary" />
+                    <span>Add to Queue</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setInspectEntry(mobileActionEntry);
+                      setMobileActionMenuOpen(false);
+                    }}
+                    className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
+                  >
+                    <Info className="w-5 h-5 text-primary" />
+                    <span>Inspect Vorbis & Technical Headers</span>
+                  </button>
+                </>
+              )}
+
+              {/* If Folder */}
+              {mobileActionEntry.is_dir && (
+                <>
+                  <button
+                    onClick={() => {
+                      loadDirectory(mobileActionEntry.path);
+                      setMobileActionMenuOpen(false);
+                    }}
+                    className="w-full py-3 flex items-center space-x-3 text-white hover:text-primary transition-colors cursor-pointer text-left"
+                  >
+                    <FolderOpen className="w-5 h-5 text-primary" />
+                    <span>Open Folder</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      handlePlayFolder();
+                      setMobileActionMenuOpen(false);
+                    }}
+                    className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
+                  >
+                    <Play className="w-5 h-5 text-primary fill-current" />
+                    <span>Play All Tracks in Folder</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      handleScanFolder(mobileActionEntry.path);
+                      setMobileActionMenuOpen(false);
+                    }}
+                    className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
+                  >
+                    <FolderSync className="w-5 h-5 text-emerald-400" />
+                    <span>Scan Folder to Music Library</span>
+                  </button>
+                </>
+              )}
+
+              {/* Download raw file (for non-folders) */}
+              {!mobileActionEntry.is_dir && (
+                <a
+                  href={`/api/fs/download?path=${encodeURIComponent(mobileActionEntry.path)}`}
+                  download
+                  onClick={() => setMobileActionMenuOpen(false)}
+                  className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left block"
+                >
+                  <Download className="w-5 h-5 text-primary" />
+                  <span>Download Raw File</span>
+                </a>
+              )}
+
+              {/* Rename */}
+              <button
+                onClick={() => {
+                  setRenameEntry(mobileActionEntry);
+                  setRenameNewName(mobileActionEntry.name);
+                  setMobileActionMenuOpen(false);
+                }}
+                className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
+              >
+                <Pencil className="w-5 h-5 text-amber-400" />
+                <span>Rename</span>
+              </button>
+
+              {/* Cut / Move */}
+              <button
+                onClick={() => {
+                  handleCut([mobileActionEntry]);
+                  setMobileActionMenuOpen(false);
+                }}
+                className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
+              >
+                <Scissors className="w-5 h-5 text-accent" />
+                <span>Cut (Move to another folder)</span>
+              </button>
+
+              {/* Copy */}
+              <button
+                onClick={() => {
+                  handleCopy([mobileActionEntry]);
+                  setMobileActionMenuOpen(false);
+                }}
+                className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
+              >
+                <Copy className="w-5 h-5 text-sky-400" />
+                <span>Copy</span>
+              </button>
+
+              {/* Delete */}
+              <button
+                onClick={() => {
+                  setDeleteConfirmPaths([mobileActionEntry.path]);
+                  setMobileActionMenuOpen(false);
+                }}
+                className="w-full py-3 flex items-center space-x-3 text-rose-400 hover:text-rose-300 transition-colors cursor-pointer text-left"
+              >
+                <Trash2 className="w-5 h-5 text-rose-400" />
+                <span>Delete</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

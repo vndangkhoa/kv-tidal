@@ -47,6 +47,7 @@ export default function SettingsPage() {
   const [adding, setAdding] = useState(false);
 
   // Audiophile Hardware Engine Settings State
+  const [activeCategory, setActiveCategory] = useState<"all" | "audio" | "engine" | "streaming" | "storage" | "subsonic">("all");
   const [hardwareMode, setHardwareMode] = useState<string>("hw");
   const [dsdMode, setDsdMode] = useState<string>("dop");
   const [bufferFrames, setBufferFrames] = useState<number>(512);
@@ -292,109 +293,142 @@ export default function SettingsPage() {
   const latencyCalculated = ((bufferFrames / (deviceTelemetry?.sample_rate || 44100)) * 1000).toFixed(1);
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 pb-16">
+    <div className="max-w-4xl mx-auto space-y-5 sm:space-y-8 pb-16">
       <div>
-        <div className="flex items-center space-x-2 text-xs font-mono font-bold text-primary uppercase tracking-widest mb-1">
-          <Cpu className="w-4 h-4 text-primary" />
+        <div className="flex items-center space-x-2 text-[11px] sm:text-xs font-mono font-bold text-primary uppercase tracking-widest mb-1">
+          <Cpu className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-primary" />
           <span>Audiophile DAC & Storage Architecture</span>
         </div>
-        <h1 className="text-2xl font-bold text-textPrimary">Configuration & Audiophile Hardware</h1>
-        <p className="text-sm text-textSecondary mt-1">
+        <h1 className="text-xl sm:text-2xl font-bold text-textPrimary">Configuration & Audiophile Hardware</h1>
+        <p className="hidden sm:block text-sm text-textSecondary mt-1">
           Manage bit-perfect ALSA kernel endpoints, DSD direct stream routing, DAC jitter buffers, and Synology NAS shares.
         </p>
       </div>
 
+      {/* Category Quick Switcher Navigation Bar */}
+      <div className="flex items-center space-x-2 overflow-x-auto no-scrollbar pb-2.5 -mx-4 px-4 sm:mx-0 sm:px-0 border-b border-border/50">
+        {[
+          { id: "all", label: "All Settings", icon: Settings },
+          { id: "audio", label: "Audio Devices", icon: Speaker },
+          { id: "engine", label: "Engine & DAC", icon: Sliders },
+          { id: "streaming", label: "Tidal & P2P", icon: Zap },
+          { id: "storage", label: "NAS & Shares", icon: HardDrive },
+          { id: "subsonic", label: "Subsonic & Apps", icon: Smartphone },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeCategory === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveCategory(tab.id as any)}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                isActive
+                  ? "bg-primary text-black font-bold shadow-md shadow-primary/20"
+                  : "bg-surface border border-border text-textSecondary hover:text-textPrimary hover:border-textSecondary/40"
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* Bit-Perfect Audio Output Devices (ALSA / USB DACs) */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {(activeCategory === "all" || activeCategory === "audio") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <Speaker className="w-5 h-5 text-primary flex-shrink-0" />
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-textPrimary">Bit-Perfect Audio Output Devices (ALSA / USB DACs)</h2>
+                <p className="text-xs text-textSecondary mt-0.5">
+                  Select your audio endpoint. External USB DACs and S/PDIF interfaces bypass the OS mixer and lock sample rates directly to the DAC master crystal.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2 flex-shrink-0">
+              <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border ${
+                deviceTelemetry?.is_exclusive_bit_perfect
+                  ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                  : "bg-cyan-500/20 text-cyan-300 border-cyan-500/30"
+              }`}>
+                {deviceTelemetry?.is_exclusive_bit_perfect ? "EXCLUSIVE BIT-PERFECT" : "BROWSER AUDIO"}
+              </span>
+              <button
+                onClick={() => fetchOutputDevices()}
+                title="Refresh detected soundcards"
+                className="p-1.5 rounded-lg border border-border hover:border-primary/40 text-textSecondary hover:text-textPrimary transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3 pt-1">
+            {outputDevices.map((dev) => {
+              const isSelected = activeDeviceId === dev.id;
+              return (
+                <button
+                  key={dev.id}
+                  onClick={() => selectOutputDevice(dev.id)}
+                  className={`p-3.5 sm:p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-2 ${
+                    isSelected
+                      ? "bg-card border-primary ring-1 ring-primary shadow-lg shadow-primary/10"
+                      : "bg-card/40 hover:bg-card border-border text-textSecondary hover:text-white"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-white flex items-center space-x-1.5 truncate">
+                        <span className="truncate">{dev.name}</span>
+                      </div>
+                      <div className="text-xs font-mono text-textSecondary mt-0.5 truncate">
+                        {dev.device_type} • {dev.hardware_id}
+                      </div>
+                      {dev.description && (
+                        <div className="text-[11px] text-textSecondary/70 mt-1 line-clamp-2">
+                          {dev.description}
+                        </div>
+                      )}
+                    </div>
+                    {isSelected && (
+                      <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-2 pt-2 border-t border-border/40 text-[11px] font-mono">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                      dev.is_bit_perfect ? "bg-emerald-500/20 text-emerald-300" : "bg-border text-textSecondary"
+                    }`}>
+                      {dev.is_bit_perfect ? "Bit-Perfect" : "Resampled"}
+                    </span>
+                    <span className="text-textSecondary">
+                      Max: {(dev.max_sample_rate / 1000).toFixed(0)} kHz
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Audiophile Kernel Transport & Audio Engine Tuning */}
+      {(activeCategory === "all" || activeCategory === "engine") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4 sm:space-y-6">
           <div className="flex items-center space-x-3">
-            <Speaker className="w-5 h-5 text-primary" />
+            <Sliders className="w-5 h-5 text-accent flex-shrink-0" />
             <div>
-              <h2 className="text-lg font-bold text-textPrimary">Bit-Perfect Audio Output Devices (ALSA / USB DACs)</h2>
+              <h2 className="text-base sm:text-lg font-bold text-textPrimary">Audiophile Audio Engine & Kernel Transport</h2>
               <p className="text-xs text-textSecondary mt-0.5">
-                Select your audio endpoint. External USB DACs and S/PDIF interfaces bypass the OS mixer and lock sample rates directly to the DAC master crystal.
+                Fine-tune low-level ALSA driver access, Direct DSD bitstream transmission, and buffer jitter characteristics.
               </p>
             </div>
           </div>
-          <div className="flex items-center space-x-2 flex-shrink-0">
-            <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border ${
-              deviceTelemetry?.is_exclusive_bit_perfect
-                ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
-                : "bg-cyan-500/20 text-cyan-300 border-cyan-500/30"
-            }`}>
-              {deviceTelemetry?.is_exclusive_bit_perfect ? "EXCLUSIVE BIT-PERFECT" : "BROWSER AUDIO"}
-            </span>
-            <button
-              onClick={() => fetchOutputDevices()}
-              title="Refresh detected soundcards"
-              className="p-1.5 rounded-lg border border-border hover:border-primary/40 text-textSecondary hover:text-textPrimary transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-          {outputDevices.map((dev) => {
-            const isSelected = activeDeviceId === dev.id;
-            return (
-              <button
-                key={dev.id}
-                onClick={() => selectOutputDevice(dev.id)}
-                className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-2 ${
-                  isSelected
-                    ? "bg-card border-primary ring-1 ring-primary shadow-lg shadow-primary/10"
-                    : "bg-card/40 hover:bg-card border-border text-textSecondary hover:text-white"
-                }`}
-              >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-bold text-white flex items-center space-x-1.5">
-                      <span>{dev.name}</span>
-                    </div>
-                    <div className="text-xs font-mono text-textSecondary mt-0.5">
-                      {dev.device_type} • {dev.hardware_id}
-                    </div>
-                    {dev.description && (
-                      <div className="text-[11px] text-textSecondary/70 mt-1">
-                        {dev.description}
-                      </div>
-                    )}
-                  </div>
-                  {isSelected && (
-                    <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" />
-                  )}
-                </div>
-
-                <div className="flex items-center space-x-2 pt-2 border-t border-border/40 text-[11px] font-mono">
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                    dev.is_bit_perfect ? "bg-emerald-500/20 text-emerald-300" : "bg-border text-textSecondary"
-                  }`}>
-                    {dev.is_bit_perfect ? "Bit-Perfect" : "Resampled"}
-                  </span>
-                  <span className="text-textSecondary">
-                    Max: {(dev.max_sample_rate / 1000).toFixed(0)} kHz
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Audiophile Kernel Transport & Audio Engine Tuning */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-6">
-        <div className="flex items-center space-x-3">
-          <Sliders className="w-5 h-5 text-accent" />
-          <div>
-            <h2 className="text-lg font-bold text-textPrimary">Audiophile Audio Engine & Kernel Transport</h2>
-            <p className="text-xs text-textSecondary mt-0.5">
-              Fine-tune low-level ALSA driver access, Direct DSD bitstream transmission, and buffer jitter characteristics.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 text-xs">
           {/* ALSA Hardware Access Mode */}
           <div className="bg-card/60 border border-border p-4 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
@@ -487,10 +521,10 @@ export default function SettingsPage() {
                 onChange={(e) => handleApplyBuffer(parseInt(e.target.value))}
                 className="w-full h-1.5 bg-border rounded-lg appearance-none cursor-pointer accent-cyan-400"
               />
-              <div className="flex justify-between font-mono text-[10px] text-textSecondary">
-                <span>64 frames (Ultra Low 1.4ms)</span>
-                <span>512 frames (Optimal)</span>
-                <span>1024 frames (Rock Solid 23ms)</span>
+              <div className="flex justify-between font-mono text-[9px] sm:text-[10px] text-textSecondary">
+                <span>64 frames (1.4ms)</span>
+                <span className="hidden sm:inline">512 frames (Optimal)</span>
+                <span>1024 frames (23ms)</span>
               </div>
             </div>
           </div>
@@ -606,480 +640,495 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+    )}
 
       {/* Live Bit-Perfect Hardware Audit Console */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center space-x-3">
-            <Terminal className="w-5 h-5 text-emerald-400" />
-            <div>
-              <h2 className="text-lg font-bold text-textPrimary">Live Bit-Perfect Hardware Audit Console</h2>
-              <p className="text-xs text-textSecondary mt-0.5">
-                Real-time diagnostic probe verifying zero bit truncation, active ALSA hardware parameters, and master clock synchronization.
-              </p>
+      {(activeCategory === "all" || activeCategory === "audio") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <Terminal className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-textPrimary">Live Bit-Perfect Hardware Audit Console</h2>
+                <p className="text-xs text-textSecondary mt-0.5">
+                  Real-time diagnostic probe verifying zero bit truncation, active ALSA hardware parameters, and master clock synchronization.
+                </p>
+              </div>
             </div>
-          </div>
-          <button
-            onClick={runHardwareAudit}
-            disabled={auditRunning}
-            className="flex items-center space-x-2 px-3.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold rounded-xl text-xs transition-all flex-shrink-0"
-          >
-            {auditRunning ? (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <ShieldCheck className="w-3.5 h-3.5" />
-            )}
-            <span>{auditRunning ? "Auditing ALSA MMAP..." : "Run Hardware Audit"}</span>
-          </button>
-        </div>
-
-        {/* Console Log Window */}
-        <div className="bg-card/90 border border-border/80 rounded-xl p-4 font-mono text-xs space-y-1.5 text-textSecondary overflow-x-auto shadow-inner">
-          <div className="flex items-center justify-between pb-2 mb-2 border-b border-border/40 text-[11px] text-textSecondary/80">
-            <span className="flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-white font-semibold">KERNEL AUDIO DAEMON DIAGNOSTICS</span>
-            </span>
-            <span>CLOCK: ASYNC LOCKED (0 JITTER)</span>
-          </div>
-          {auditLogs.map((log, idx) => (
-            <div
-              key={idx}
-              className={
-                log.includes("AUDIT STATUS")
-                  ? "text-emerald-400 font-bold pt-1"
-                  : log.includes("PASSED") || log.includes("locked") || log.includes("Bit-Perfect")
-                  ? "text-textPrimary font-medium"
-                  : "text-textSecondary"
-              }
+            <button
+              onClick={runHardwareAudit}
+              disabled={auditRunning}
+              className="flex items-center space-x-2 px-3.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold rounded-xl text-xs transition-all flex-shrink-0"
             >
-              {log}
+              {auditRunning ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <ShieldCheck className="w-3.5 h-3.5" />
+              )}
+              <span>{auditRunning ? "Auditing ALSA MMAP..." : "Run Hardware Audit"}</span>
+            </button>
+          </div>
+
+          {/* Console Log Window */}
+          <div className="bg-card/90 border border-border/80 rounded-xl p-3 sm:p-4 font-mono text-xs space-y-1.5 text-textSecondary overflow-x-auto shadow-inner">
+            <div className="flex items-center justify-between pb-2 mb-2 border-b border-border/40 text-[10px] sm:text-[11px] text-textSecondary/80">
+              <span className="flex items-center space-x-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-white font-semibold">KERNEL AUDIO DAEMON DIAGNOSTICS</span>
+              </span>
+              <span className="hidden sm:inline">CLOCK: ASYNC LOCKED (0 JITTER)</span>
             </div>
-          ))}
+            {auditLogs.map((log, idx) => (
+              <div
+                key={idx}
+                className={
+                  log.includes("AUDIT STATUS")
+                    ? "text-emerald-400 font-bold pt-1"
+                    : log.includes("PASSED") || log.includes("locked") || log.includes("Bit-Perfect")
+                    ? "text-textPrimary font-medium"
+                    : "text-textSecondary"
+                }
+              >
+                {log}
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 1. Tidal HiFi Direct Master Streaming Engine */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center space-x-3">
-            <Zap className="w-5 h-5 text-amber-400" />
-            <div>
-              <h2 className="text-lg font-bold text-textPrimary">Tidal HiFi Master FLAC Engine</h2>
-              <p className="text-xs text-textSecondary mt-0.5">
-                Stream 24-bit / 192kHz Master FLAC bit-perfect directly from Tidal's official CDN (<code className="text-amber-400 font-mono">sp-storage.tidal.com</code>) using your personal subscriber Bearer Token.
-              </p>
-            </div>
-          </div>
-          <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border self-start sm:self-auto ${
-            tidalHasToken
-              ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
-              : "bg-card text-textSecondary border-border"
-          }`}>
-            {tidalHasToken ? "DIRECT MASTER ACTIVE" : "ONLINE FALLBACK MODE"}
-          </span>
-        </div>
-
-        <form onSubmit={handleSaveTidal} className="space-y-4 pt-1">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="md:col-span-2 space-y-1.5">
-              <label className="text-xs font-semibold text-textSecondary flex items-center justify-between">
-                <span>Tidal Session Bearer Token / OAuth Token</span>
-                {tidalTokenMasked && (
-                  <span className="text-[11px] font-mono text-amber-400 font-normal">
-                    Configured: {tidalTokenMasked}
-                  </span>
-                )}
-              </label>
-              <div className="relative">
-                <input
-                  type={showTidalToken ? "text" : "password"}
-                  value={tidalToken}
-                  onChange={(e) => setTidalToken(e.target.value)}
-                  placeholder={tidalHasToken ? "Leave empty to keep current token, or paste new token..." : "Paste your Bearer token (e.g. eyJhbGci...)"}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-amber-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowTidalToken(!showTidalToken)}
-                  className="absolute right-3 top-2.5 text-textSecondary hover:text-white"
-                >
-                  {showTidalToken ? <Lock className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
-                </button>
+      {(activeCategory === "all" || activeCategory === "streaming") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <Zap className="w-5 h-5 text-amber-400 flex-shrink-0" />
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-textPrimary">Tidal HiFi Master FLAC Engine</h2>
+                <p className="text-xs text-textSecondary mt-0.5">
+                  Stream 24-bit / 192kHz Master FLAC bit-perfect directly from Tidal's official CDN (<code className="text-amber-400 font-mono">sp-storage.tidal.com</code>) using your personal subscriber Bearer Token.
+                </p>
               </div>
             </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-textSecondary">Stream Quality Target</label>
-              <select
-                value={tidalQuality}
-                onChange={(e) => setTidalQuality(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-amber-400 text-xs font-mono text-white outline-none cursor-pointer"
-              >
-                <option value="HI_RES_LOSSLESS">HI_RES_LOSSLESS (24-bit / 192kHz)</option>
-                <option value="LOSSLESS">LOSSLESS (16-bit / 44.1kHz FLAC)</option>
-                <option value="HIGH">HIGH (320 kbps AAC)</option>
-              </select>
-            </div>
-          </div>
-
-          {tidalStatusMsg && (
-            <div className={`p-3 rounded-xl border text-xs font-mono flex items-center space-x-2 ${
-              tidalStatusMsg.success
-                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
-                : "bg-red-500/10 border-red-500/30 text-red-400"
+            <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border self-start sm:self-auto ${
+              tidalHasToken
+                ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                : "bg-card text-textSecondary border-border"
             }`}>
-              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-              <span>{tidalStatusMsg.text}</span>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-[11px] text-textSecondary">
-              Tip: Without a token, online trending tracks will gracefully resolve via high-speed Opus fallback (~160kbps).
+              {tidalHasToken ? "DIRECT MASTER ACTIVE" : "ONLINE FALLBACK MODE"}
             </span>
-            <button
-              type="submit"
-              disabled={testingTidal}
-              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-semibold text-xs rounded-xl transition-all shadow-md flex items-center space-x-1.5 cursor-pointer"
-            >
-              {testingTidal && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-              <span>Save & Verify Tidal Token</span>
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* 2. Soulseek (slskd) Lossless FLAC Engine */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center space-x-3">
-            <Radio className="w-5 h-5 text-purple-400" />
-            <div>
-              <h2 className="text-lg font-bold text-textPrimary">Soulseek Lossless FLAC Engine (100% Free)</h2>
-              <p className="text-xs text-textSecondary mt-0.5">
-                Connect to a Soulseek (<code className="text-purple-400 font-mono">slskd</code>) daemon to discover and download authentic bit-perfect FLAC (16-bit / 24-bit, 25MB - 80MB) with no Tidal accounts and zero geo-blocking.
-              </p>
-            </div>
-          </div>
-          <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border self-start sm:self-auto ${
-            soulseekStatusMsg?.success
-              ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
-              : soulseekEnabled
-              ? "bg-card text-textSecondary border-border"
-              : "bg-red-500/10 text-red-400 border-red-500/20"
-          }`}>
-            {soulseekStatusMsg?.success
-              ? `CONNECTED (${soulseekStatusMsg.version || "slskd"})`
-              : soulseekEnabled
-              ? "ENABLED"
-              : "DISABLED"}
-          </span>
-        </div>
-
-        <form onSubmit={handleSaveSoulseek} className="space-y-4 pt-1">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2 space-y-1.5">
-              <label className="text-xs font-semibold text-textSecondary">slskd REST API Base URL</label>
-              <input
-                type="text"
-                value={soulseekUrl}
-                onChange={(e) => setSoulseekUrl(e.target.value)}
-                placeholder="http://127.0.0.1:5030 or http://192.168.1.10:5030"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-textSecondary">API Key (Optional)</label>
-              <input
-                type="password"
-                value={soulseekApiKey}
-                onChange={(e) => setSoulseekApiKey(e.target.value)}
-                placeholder={soulseekHasApiKey ? "•••••••• (configured)" : "Leave blank if no auth"}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
-              />
-            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-textSecondary">Soulseek Account Username</label>
-              <input
-                type="text"
-                value={soulseekUsername}
-                onChange={(e) => setSoulseekUsername(e.target.value)}
-                placeholder="e.g. khoavo_nas"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-textSecondary">Soulseek Account Password</label>
-                {soulseekHasPassword && !soulseekPassword && (
-                  <span className="text-[10px] text-emerald-400 font-mono">Configured</span>
-                )}
-              </div>
-              <div className="relative">
-                <input
-                  type={showSoulseekPassword ? "text" : "password"}
-                  value={soulseekPassword}
-                  onChange={(e) => setSoulseekPassword(e.target.value)}
-                  placeholder={soulseekHasPassword ? "•••••••• (leave blank to keep)" : "Enter Soulseek password"}
-                  className="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowSoulseekPassword(!showSoulseekPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-textSecondary hover:text-white transition-colors cursor-pointer"
-                >
-                  {showSoulseekPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-3">
-            <input
-              type="checkbox"
-              id="slskd_enabled"
-              checked={soulseekEnabled}
-              onChange={(e) => setSoulseekEnabled(e.target.checked)}
-              className="w-4 h-4 rounded bg-card border-border text-purple-500 accent-purple-500 focus:ring-0 cursor-pointer"
-            />
-            <label htmlFor="slskd_enabled" className="text-xs text-textSecondary cursor-pointer select-none">
-              Prioritize Soulseek network for authentic 25MB - 80MB FLAC master retrieval during download requests
-            </label>
-          </div>
-
-          {soulseekStatusMsg && (
-            <div className={`p-3 rounded-xl border text-xs font-mono flex items-center space-x-2 ${
-              soulseekStatusMsg.success
-                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
-                : "bg-amber-500/10 border-amber-500/30 text-amber-400"
-            }`}>
-              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-              <span>{soulseekStatusMsg.text}</span>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-[11px] text-textSecondary">
-              Default slskd port is <code className="text-purple-400">5030</code>.
-            </span>
-            <button
-              type="submit"
-              disabled={testingSoulseek}
-              className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl transition-all shadow-md flex items-center space-x-1.5 cursor-pointer"
-            >
-              {testingSoulseek && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-              <span>Save & Test slskd Connection</span>
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* Mapped Music Folders Section */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4">
-        <div className="flex items-center space-x-3">
-          <Settings className="w-5 h-5 text-primary" />
-          <div>
-            <h2 className="text-lg font-bold text-textPrimary">Mapped NAS Music Libraries</h2>
-            <p className="text-xs text-textSecondary mt-0.5">
-              Map Synology NAS shared folders (e.g. <code className="text-primary font-mono">/volume1/music</code>). The engine scans ID3v2/FLAC metadata and uses Linux <code className="text-primary font-mono">inotify</code> to detect new master rips in real time.
-            </p>
-          </div>
-        </div>
-
-        {/* Existing folders table */}
-        <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
-          {folders.length === 0 ? (
-            <div className="p-4 text-center text-xs text-textSecondary font-mono">
-              No music shares mapped yet. Add a NAS folder below to start scanning your audiophile vault.
-            </div>
-          ) : (
-            folders.map((f, i) => (
-              <div key={i} className="flex items-center justify-between p-3.5 bg-card/40 text-sm">
-                <div>
-                  <span className="font-semibold text-textPrimary">{f.name}</span>
-                  <p className="text-xs font-mono text-textSecondary mt-0.5">{f.path}</p>
-                </div>
-                <div className="flex items-center space-x-2">
-                  {f.is_download_target && (
-                    <span className="px-2 py-0.5 text-[10px] font-bold bg-accent/20 text-accent border border-accent/40 rounded">
-                      DOWNLOAD TARGET
+          <form onSubmit={handleSaveTidal} className="space-y-4 pt-1">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-2 space-y-1.5">
+                <label className="text-xs font-semibold text-textSecondary flex items-center justify-between">
+                  <span>Tidal Session Bearer Token / OAuth Token</span>
+                  {tidalTokenMasked && (
+                    <span className="text-[11px] font-mono text-amber-400 font-normal">
+                      Configured: {tidalTokenMasked}
                     </span>
                   )}
-                  <span className="px-2 py-0.5 text-[10px] font-bold bg-primary/20 text-primary border border-primary/40 rounded flex items-center space-x-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                    <span>INOTIFY WATCHING</span>
-                  </span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showTidalToken ? "text" : "password"}
+                    value={tidalToken}
+                    onChange={(e) => setTidalToken(e.target.value)}
+                    placeholder={tidalHasToken ? "Leave empty to keep current token, or paste new token..." : "Paste your Bearer token (e.g. eyJhbGci...)"}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-amber-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowTidalToken(!showTidalToken)}
+                    className="absolute right-3 top-2.5 text-textSecondary hover:text-white"
+                  >
+                    {showTidalToken ? <Lock className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
-            ))
-          )}
-        </div>
 
-        {/* Add New Folder Form */}
-        <form onSubmit={handleAddFolder} className="pt-2 space-y-3">
-          <h4 className="text-xs font-semibold text-textSecondary uppercase tracking-wider">
-            Map Another NAS Share / Volume:
-          </h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <input
-              type="text"
-              placeholder="Display Name (e.g. Master FLAC Vault)"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              className="bg-card border border-border rounded-xl px-3 py-2 text-sm text-textPrimary placeholder-textSecondary/50 focus:outline-none focus:border-primary"
-            />
-            <input
-              type="text"
-              placeholder="NAS Path (e.g. /volume1/music/Masters)"
-              value={newPath}
-              onChange={(e) => setNewPath(e.target.value)}
-              className="bg-card border border-border rounded-xl px-3 py-2 text-sm text-textPrimary font-mono placeholder-textSecondary/50 focus:outline-none focus:border-primary"
-              required
-            />
-          </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-textSecondary">Stream Quality Target</label>
+                <select
+                  value={tidalQuality}
+                  onChange={(e) => setTidalQuality(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-amber-400 text-xs font-mono text-white outline-none cursor-pointer"
+                >
+                  <option value="HI_RES_LOSSLESS">HI_RES_LOSSLESS (24-bit / 192kHz)</option>
+                  <option value="LOSSLESS">LOSSLESS (16-bit / 44.1kHz FLAC)</option>
+                  <option value="HIGH">HIGH (320 kbps AAC)</option>
+                </select>
+              </div>
+            </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-            <label className="flex items-center space-x-2 text-xs text-textSecondary cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isDownloadTarget}
-                onChange={(e) => setIsDownloadTarget(e.target.checked)}
-                className="rounded border-border text-primary focus:ring-primary"
-              />
-              <span>Set as default target directory for high-res rips & DSD downloads</span>
-            </label>
+            {tidalStatusMsg && (
+              <div className={`p-3 rounded-xl border text-xs font-mono flex items-center space-x-2 ${
+                tidalStatusMsg.success
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                  : "bg-red-500/10 border-red-500/30 text-red-400"
+              }`}>
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                <span>{tidalStatusMsg.text}</span>
+              </div>
+            )}
 
-            <button
-              type="submit"
-              disabled={adding}
-              className="flex items-center justify-center space-x-1.5 px-4 py-2 bg-primary text-background font-semibold rounded-lg text-xs hover:scale-105 transition-transform shadow-md"
-            >
-              <FolderPlus className="w-4 h-4" />
-              <span>Map NAS Share</span>
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* Subsonic Connection Card */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4">
-        <div className="flex items-center space-x-3">
-          <Smartphone className="w-5 h-5 text-accent" />
-          <h2 className="text-lg font-bold text-textPrimary">Connect Mobile & Desktop Subsonic Audiophile Clients</h2>
-        </div>
-        <p className="text-xs text-textSecondary">
-          Connect native high-fidelity apps like <strong>Symfonium</strong> (Android Bit-Perfect USB DAC driver), <strong>Feishin</strong> (Desktop WASAPI/ASIO), <strong>Ample / Tempo</strong> (iOS), or <strong>Substreamer</strong>:
-        </p>
-
-        <div className="bg-card/70 border border-border p-4 rounded-xl font-mono text-xs space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-textSecondary">Server Address:</span>
-            <div className="flex items-center space-x-2">
-              <span className="text-primary font-bold">
-                {serverHost ? `http://${serverHost}:${serverPort || "26784"}` : "http://<synology-nas-ip>:26784"}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+              <span className="text-[11px] text-textSecondary">
+                Tip: Without a token, online trending tracks will gracefully resolve via high-speed Opus fallback (~160kbps).
               </span>
               <button
-                type="button"
-                onClick={() => {
-                  const url = `http://${serverHost || "192.168.1.10"}:${serverPort || "26784"}`;
-                  navigator.clipboard.writeText(url);
-                  setCopiedUrl(true);
-                  setTimeout(() => setCopiedUrl(false), 2000);
-                }}
-                className="px-2 py-0.5 rounded bg-surface border border-border hover:border-primary text-[10px] text-textSecondary hover:text-white transition-colors"
+                type="submit"
+                disabled={testingTidal}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-semibold text-xs rounded-xl transition-all shadow-md flex items-center justify-center space-x-1.5 cursor-pointer"
               >
-                {copiedUrl ? "Copied!" : "Copy URL"}
+                {testingTidal && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>Save & Verify Tidal Token</span>
               </button>
             </div>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-textSecondary">Subsonic Endpoint:</span>
-            <span className="text-textPrimary font-bold">/rest</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-textSecondary">Full URL (Symfonium / Feishin):</span>
-            <span className="text-emerald-400 font-bold">
-              {serverHost ? `http://${serverHost}:${serverPort || "26784"}/rest` : "http://<synology-nas-ip>:26784/rest"}
+          </form>
+        </div>
+      )}
+
+      {/* 2. Soulseek (slskd) Lossless FLAC Engine */}
+      {(activeCategory === "all" || activeCategory === "streaming") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <Radio className="w-5 h-5 text-purple-400 flex-shrink-0" />
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-textPrimary">Soulseek Lossless FLAC Engine (100% Free)</h2>
+                <p className="text-xs text-textSecondary mt-0.5">
+                  Connect to a Soulseek (<code className="text-purple-400 font-mono">slskd</code>) daemon to discover and download authentic bit-perfect FLAC (16-bit / 24-bit, 25MB - 80MB) with no Tidal accounts and zero geo-blocking.
+                </p>
+              </div>
+            </div>
+            <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border self-start sm:self-auto ${
+              soulseekStatusMsg?.success
+                ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
+                : soulseekEnabled
+                ? "bg-card text-textSecondary border-border"
+                : "bg-red-500/10 text-red-400 border-red-500/20"
+            }`}>
+              {soulseekStatusMsg?.success
+                ? `CONNECTED (${soulseekStatusMsg.version || "slskd"})`
+                : soulseekEnabled
+                ? "ENABLED"
+                : "DISABLED"}
             </span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-textSecondary">Username:</span>
-            <span className="text-textPrimary font-bold">{subsonicUser}</span>
+
+          <form onSubmit={handleSaveSoulseek} className="space-y-4 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-2 space-y-1.5">
+                <label className="text-xs font-semibold text-textSecondary">slskd REST API Base URL</label>
+                <input
+                  type="text"
+                  value={soulseekUrl}
+                  onChange={(e) => setSoulseekUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:5030 or http://192.168.1.10:5030"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-textSecondary">API Key (Optional)</label>
+                <input
+                  type="password"
+                  value={soulseekApiKey}
+                  onChange={(e) => setSoulseekApiKey(e.target.value)}
+                  placeholder={soulseekHasApiKey ? "•••••••• (configured)" : "Leave blank if no auth"}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-textSecondary">Soulseek Account Username</label>
+                <input
+                  type="text"
+                  value={soulseekUsername}
+                  onChange={(e) => setSoulseekUsername(e.target.value)}
+                  placeholder="e.g. khoavo_nas"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-textSecondary">Soulseek Account Password</label>
+                  {soulseekHasPassword && !soulseekPassword && (
+                    <span className="text-[10px] text-emerald-400 font-mono">Configured</span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type={showSoulseekPassword ? "text" : "password"}
+                    value={soulseekPassword}
+                    onChange={(e) => setSoulseekPassword(e.target.value)}
+                    placeholder={soulseekHasPassword ? "•••••••• (leave blank to keep)" : "Enter Soulseek password"}
+                    className="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-card border border-border focus:border-purple-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSoulseekPassword(!showSoulseekPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-textSecondary hover:text-white transition-colors cursor-pointer"
+                  >
+                    {showSoulseekPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <input
+                type="checkbox"
+                id="slskd_enabled"
+                checked={soulseekEnabled}
+                onChange={(e) => setSoulseekEnabled(e.target.checked)}
+                className="w-4 h-4 rounded bg-card border-border text-purple-500 accent-purple-500 focus:ring-0 cursor-pointer"
+              />
+              <label htmlFor="slskd_enabled" className="text-xs text-textSecondary cursor-pointer select-none">
+                Prioritize Soulseek network for authentic 25MB - 80MB FLAC master retrieval during download requests
+              </label>
+            </div>
+
+            {soulseekStatusMsg && (
+              <div className={`p-3 rounded-xl border text-xs font-mono flex items-center space-x-2 ${
+                soulseekStatusMsg.success
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                  : "bg-amber-500/10 border-amber-500/30 text-amber-400"
+              }`}>
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                <span>{soulseekStatusMsg.text}</span>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+              <span className="text-[11px] text-textSecondary">
+                Default slskd port is <code className="text-purple-400">5030</code>.
+              </span>
+              <button
+                type="submit"
+                disabled={testingSoulseek}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl transition-all shadow-md flex items-center justify-center space-x-1.5 cursor-pointer"
+              >
+                {testingSoulseek && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>Save & Test slskd Connection</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Mapped Music Folders Section */}
+      {(activeCategory === "all" || activeCategory === "storage") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4">
+          <div className="flex items-center space-x-3">
+            <Settings className="w-5 h-5 text-primary flex-shrink-0" />
+            <div>
+              <h2 className="text-base sm:text-lg font-bold text-textPrimary">Mapped NAS Music Libraries</h2>
+              <p className="text-xs text-textSecondary mt-0.5">
+                Map Synology NAS shared folders (e.g. <code className="text-primary font-mono">/volume1/music</code>). The engine scans ID3v2/FLAC metadata and uses Linux <code className="text-primary font-mono">inotify</code> to detect new master rips in real time.
+              </p>
+            </div>
           </div>
-          <div className="flex justify-between">
-            <span className="text-textSecondary">Password:</span>
-            <span className="text-textPrimary font-bold">admin <span className="text-textSecondary font-normal text-[11px]">(or your installer password)</span></span>
+
+          {/* Existing folders table */}
+          <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+            {folders.length === 0 ? (
+              <div className="p-4 text-center text-xs text-textSecondary font-mono">
+                No music shares mapped yet. Add a NAS folder below to start scanning your audiophile vault.
+              </div>
+            ) : (
+              folders.map((f, i) => (
+                <div key={i} className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 bg-card/40 text-sm gap-2">
+                  <div>
+                    <span className="font-semibold text-textPrimary">{f.name}</span>
+                    <p className="text-xs font-mono text-textSecondary mt-0.5 break-all">{f.path}</p>
+                  </div>
+                  <div className="flex items-center space-x-2 flex-shrink-0">
+                    {f.is_download_target && (
+                      <span className="px-2 py-0.5 text-[10px] font-bold bg-accent/20 text-accent border border-accent/40 rounded">
+                        DOWNLOAD TARGET
+                      </span>
+                    )}
+                    <span className="px-2 py-0.5 text-[10px] font-bold bg-primary/20 text-primary border border-primary/40 rounded flex items-center space-x-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                      <span>INOTIFY WATCHING</span>
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Add New Folder Form */}
+          <form onSubmit={handleAddFolder} className="pt-2 space-y-3">
+            <h4 className="text-xs font-semibold text-textSecondary uppercase tracking-wider">
+              Map Another NAS Share / Volume:
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input
+                type="text"
+                placeholder="Display Name (e.g. Master FLAC Vault)"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                className="bg-card border border-border rounded-xl px-3 py-2 text-sm text-textPrimary placeholder-textSecondary/50 focus:outline-none focus:border-primary"
+              />
+              <input
+                type="text"
+                placeholder="NAS Path (e.g. /volume1/music/Masters)"
+                value={newPath}
+                onChange={(e) => setNewPath(e.target.value)}
+                className="bg-card border border-border rounded-xl px-3 py-2 text-sm text-textPrimary font-mono placeholder-textSecondary/50 focus:outline-none focus:border-primary"
+                required
+              />
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+              <label className="flex items-center space-x-2 text-xs text-textSecondary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isDownloadTarget}
+                  onChange={(e) => setIsDownloadTarget(e.target.checked)}
+                  className="rounded border-border text-primary focus:ring-primary"
+                />
+                <span>Set as default target directory for high-res rips & DSD downloads</span>
+              </label>
+
+              <button
+                type="submit"
+                disabled={adding}
+                className="flex items-center justify-center space-x-1.5 px-4 py-2 bg-primary text-background font-semibold rounded-lg text-xs hover:scale-105 transition-transform shadow-md cursor-pointer"
+              >
+                <FolderPlus className="w-4 h-4" />
+                <span>Map NAS Share</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Subsonic Connection Card */}
+      {(activeCategory === "all" || activeCategory === "subsonic") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4">
+          <div className="flex items-center space-x-3">
+            <Smartphone className="w-5 h-5 text-accent flex-shrink-0" />
+            <h2 className="text-base sm:text-lg font-bold text-textPrimary">Connect Mobile & Desktop Subsonic Audiophile Clients</h2>
+          </div>
+          <p className="text-xs text-textSecondary">
+            Connect native high-fidelity apps like <strong>Symfonium</strong> (Android Bit-Perfect USB DAC driver), <strong>Feishin</strong> (Desktop WASAPI/ASIO), <strong>Ample / Tempo</strong> (iOS), or <strong>Substreamer</strong>:
+          </p>
+
+          <div className="bg-card/70 border border-border p-3 sm:p-4 rounded-xl font-mono text-xs space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2">
+              <span className="text-textSecondary">Server Address:</span>
+              <div className="flex items-center space-x-2">
+                <span className="text-primary font-bold break-all">
+                  {serverHost ? `http://${serverHost}:${serverPort || "26784"}` : "http://<synology-nas-ip>:26784"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const url = `http://${serverHost || "192.168.1.10"}:${serverPort || "26784"}`;
+                    navigator.clipboard.writeText(url);
+                    setCopiedUrl(true);
+                    setTimeout(() => setCopiedUrl(false), 2000);
+                  }}
+                  className="px-2 py-0.5 rounded bg-surface border border-border hover:border-primary text-[10px] text-textSecondary hover:text-white transition-colors cursor-pointer flex-shrink-0"
+                >
+                  {copiedUrl ? "Copied!" : "Copy URL"}
+                </button>
+              </div>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-textSecondary">Subsonic Endpoint:</span>
+              <span className="text-textPrimary font-bold">/rest</span>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2">
+              <span className="text-textSecondary">Full URL (Symfonium / Feishin):</span>
+              <span className="text-emerald-400 font-bold break-all">
+                {serverHost ? `http://${serverHost}:${serverPort || "26784"}/rest` : "http://<synology-nas-ip>:26784/rest"}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-textSecondary">Username:</span>
+              <span className="text-textPrimary font-bold">{subsonicUser}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-textSecondary">Password:</span>
+              <span className="text-textPrimary font-bold">admin <span className="text-textSecondary font-normal text-[11px]">(or installer password)</span></span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Audiophile & Bit-Perfect Transport Guide */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-4">
-        <div className="flex items-center space-x-3">
-          <ShieldCheck className="w-5 h-5 text-amber-400" />
-          <h2 className="text-lg font-bold text-textPrimary">Audiophile & Bit-Perfect DAC Setup Guide</h2>
+      {(activeCategory === "all" || activeCategory === "subsonic") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4">
+          <div className="flex items-center space-x-3">
+            <ShieldCheck className="w-5 h-5 text-amber-400 flex-shrink-0" />
+            <h2 className="text-base sm:text-lg font-bold text-textPrimary">Audiophile & Bit-Perfect DAC Setup Guide</h2>
+          </div>
+          <p className="text-xs text-textSecondary leading-relaxed">
+            KV-Tidal serves raw, bit-perfect lossless streams (FLAC up to 24-bit / 192 kHz & DSD) without transcoding. To guarantee bit-perfect delivery to your DAC without OS mixer resampling, follow these configurations:
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 text-xs">
+            <div className="bg-card/70 border border-border p-3.5 sm:p-4 rounded-xl space-y-2">
+              <h3 className="font-semibold text-textPrimary flex items-center space-x-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>Android Bit-Perfect (Bypass 48kHz Resampler)</span>
+              </h3>
+              <p className="text-textSecondary leading-relaxed text-[11px] sm:text-xs">
+                Standard Android resamples all audio to 48 kHz. Use <strong>Symfonium</strong> with KV-Tidal's Subsonic server: go to <em>Settings → Audio → Output → Enable Custom Equalizer & Direct USB DAC Mode</em> to stream 24-bit/96kHz & 192kHz directly to your external USB DAC.
+              </p>
+            </div>
+
+            <div className="bg-card/70 border border-border p-3.5 sm:p-4 rounded-xl space-y-2">
+              <h3 className="font-semibold text-textPrimary flex items-center space-x-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-400" />
+                <span>Desktop Bit-Perfect (WASAPI / ASIO / CoreAudio)</span>
+              </h3>
+              <p className="text-textSecondary leading-relaxed text-[11px] sm:text-xs">
+                In <strong>Feishin</strong> or native Subsonic clients, configure the Audio Output device to <strong>WASAPI Exclusive (Windows)</strong> or <strong>CoreAudio Exclusive Mode (macOS)</strong>. This forces your DAC hardware clock to switch sample rates dynamically with 0% software resampling.
+              </p>
+            </div>
+
+            <div className="bg-card/70 border border-border p-3.5 sm:p-4 rounded-xl space-y-2">
+              <h3 className="font-semibold text-textPrimary flex items-center space-x-1.5">
+                <span className="w-2 h-2 rounded-full bg-purple-400" />
+                <span>Hi-Fi Network Streamers (WiiM / Eversolo / Lumin)</span>
+              </h3>
+              <p className="text-textSecondary leading-relaxed text-[11px] sm:text-xs">
+                Point your network streamers directly to KV-Tidal via OpenSubsonic or UPnP AVTransport. The Rust streaming engine serves RFC 7233 byte-ranges with zero transcoding, providing instant gapless seeking and pre-buffering.
+              </p>
+            </div>
+
+            <div className="bg-card/70 border border-border p-3.5 sm:p-4 rounded-xl space-y-2">
+              <h3 className="font-semibold text-textPrimary flex items-center space-x-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                <span>Web Browser Player (Direct Bypass Mode)</span>
+              </h3>
+              <p className="text-textSecondary leading-relaxed text-[11px] sm:text-xs">
+                In the web player bar, click the Equalizer button and ensure <strong>Bit-Perfect Direct Passthrough</strong> is active. This completely unhooks all Biquad filters, outputting bit-transparent audio to your system sound driver.
+              </p>
+            </div>
+          </div>
         </div>
-        <p className="text-xs text-textSecondary leading-relaxed">
-          KV-Tidal serves raw, bit-perfect lossless streams (FLAC up to 24-bit / 192 kHz & DSD) without transcoding. To guarantee bit-perfect delivery to your DAC without OS mixer resampling, follow these configurations:
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-          <div className="bg-card/70 border border-border p-4 rounded-xl space-y-2">
-            <h3 className="font-semibold text-textPrimary flex items-center space-x-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>Android Bit-Perfect (Bypass 48kHz Resampler)</span>
-            </h3>
-            <p className="text-textSecondary leading-relaxed">
-              Standard Android resamples all audio to 48 kHz. Use <strong>Symfonium</strong> with KV-Tidal's Subsonic server: go to <em>Settings → Audio → Output → Enable Custom Equalizer & Direct USB DAC Mode</em> to stream 24-bit/96kHz & 192kHz directly to your external USB DAC.
-            </p>
-          </div>
-
-          <div className="bg-card/70 border border-border p-4 rounded-xl space-y-2">
-            <h3 className="font-semibold text-textPrimary flex items-center space-x-1.5">
-              <span className="w-2 h-2 rounded-full bg-blue-400" />
-              <span>Desktop Bit-Perfect (WASAPI / ASIO / CoreAudio)</span>
-            </h3>
-            <p className="text-textSecondary leading-relaxed">
-              In <strong>Feishin</strong> or native Subsonic clients, configure the Audio Output device to <strong>WASAPI Exclusive (Windows)</strong> or <strong>CoreAudio Exclusive Mode (macOS)</strong>. This forces your DAC hardware clock to switch sample rates dynamically with 0% software resampling.
-            </p>
-          </div>
-
-          <div className="bg-card/70 border border-border p-4 rounded-xl space-y-2">
-            <h3 className="font-semibold text-textPrimary flex items-center space-x-1.5">
-              <span className="w-2 h-2 rounded-full bg-purple-400" />
-              <span>Hi-Fi Network Streamers (WiiM / Eversolo / Lumin)</span>
-            </h3>
-            <p className="text-textSecondary leading-relaxed">
-              Point your network streamers directly to KV-Tidal via OpenSubsonic or UPnP AVTransport. The Rust streaming engine serves RFC 7233 byte-ranges with zero transcoding, providing instant gapless seeking and pre-buffering.
-            </p>
-          </div>
-
-          <div className="bg-card/70 border border-border p-4 rounded-xl space-y-2">
-            <h3 className="font-semibold text-textPrimary flex items-center space-x-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-400" />
-              <span>Web Browser Player (Direct Bypass Mode)</span>
-            </h3>
-            <p className="text-textSecondary leading-relaxed">
-              In the web player bar, click the Equalizer button and ensure <strong>Bit-Perfect Direct Passthrough</strong> is active. This completely unhooks all Biquad filters, outputting bit-transparent audio to your system sound driver.
-            </p>
-          </div>
-        </div>
-      </div>
+      )}
 
       {/* Permissions / PUID PGID Guide */}
-      <div className="bg-surface border border-border p-6 rounded-2xl space-y-3">
-        <div className="flex items-center space-x-3">
-          <ShieldCheck className="w-5 h-5 text-primary" />
-          <h2 className="text-lg font-bold text-textPrimary">Synology DSM 7 Permissions Notice</h2>
+      {(activeCategory === "all" || activeCategory === "storage") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-3">
+          <div className="flex items-center space-x-3">
+            <ShieldCheck className="w-5 h-5 text-primary flex-shrink-0" />
+            <h2 className="text-base sm:text-lg font-bold text-textPrimary">Synology DSM 7 Permissions Notice</h2>
+          </div>
+          <p className="text-xs text-textSecondary leading-relaxed">
+            When running as a native <strong>Synology SPK package</strong>, the service account is <code className="text-primary font-mono">sc-kvtidal</code>. When running in <strong>Docker</strong>, permissions are governed by <code className="text-primary font-mono">PUID: 1000</code> and <code className="text-primary font-mono">PGID: 1000</code>. Files are created with POSIX 664 permissions so they remain fully editable via Windows SMB and Synology File Station.
+          </p>
         </div>
-        <p className="text-xs text-textSecondary leading-relaxed">
-          When running as a native <strong>Synology SPK package</strong>, the service account is <code className="text-primary font-mono">sc-kvtidal</code>. When running in <strong>Docker</strong>, permissions are governed by <code className="text-primary font-mono">PUID: 1000</code> and <code className="text-primary font-mono">PGID: 1000</code>. Files are created with POSIX 664 permissions so they remain fully editable via Windows SMB and Synology File Station.
-        </p>
-      </div>
+      )}
     </div>
   );
 }

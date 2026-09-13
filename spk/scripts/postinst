@@ -34,8 +34,28 @@ fi
 PORT="${wizard_port:-${SYNOPKG_PKG_VAR_wizard_port:-${SYNOPKG_PKG_VAR_port:-26784}}}"
 SUB_USER="${wizard_sub_user:-${SYNOPKG_PKG_VAR_wizard_sub_user:-${SYNOPKG_PKG_VAR_subsonic_user:-admin}}}"
 SUB_PASS="${wizard_sub_pass:-${SYNOPKG_PKG_VAR_wizard_sub_pass:-${SYNOPKG_PKG_VAR_subsonic_pass:-admin}}}"
+WIZARD_SLSK_USER="${wizard_slsk_user:-${SYNOPKG_PKG_VAR_wizard_slsk_user:-}}"
+WIZARD_SLSK_PASS="${wizard_slsk_pass:-${SYNOPKG_PKG_VAR_wizard_slsk_pass:-}}"
 
 CONFIG_FILE="${ETC_DIR}/config.json"
+SLSKD_DIR="${VAR_DIR}/slskd"
+SLSKD_CFG="${SLSKD_DIR}/slskd.yml"
+
+EXISTING_USER=""
+EXISTING_PASS=""
+if [ -f "/volume2/docker/slskd/slskd.yml" ]; then
+    EXISTING_USER="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+    EXISTING_PASS="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+fi
+if [ -z "$EXISTING_PASS" ] && [ -f "$SLSKD_CFG" ]; then
+    EXISTING_PASS="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+fi
+if [ -z "$EXISTING_USER" ] && [ -f "$SLSKD_CFG" ]; then
+    EXISTING_USER="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
+fi
+
+FINAL_SLSK_USER="${WIZARD_SLSK_USER:-$EXISTING_USER}"
+FINAL_SLSK_PASS="${WIZARD_SLSK_PASS:-$EXISTING_PASS}"
 
 if [ ! -f "$CONFIG_FILE" ]; then
 cat > "$CONFIG_FILE" << CONFIG_EOF
@@ -49,6 +69,10 @@ cat > "$CONFIG_FILE" << CONFIG_EOF
   "subsonic_user": "${SUB_USER}",
   "subsonic_password": "${SUB_PASS}",
   "download_dir": "${MUSIC_DIR}",
+  "soulseek_enabled": true,
+  "soulseek_url": "http://127.0.0.1:5030",
+  "soulseek_username": $(if [ -n "$FINAL_SLSK_USER" ]; then echo "\"$FINAL_SLSK_USER\""; else echo "null"; fi),
+  "soulseek_password": $(if [ -n "$FINAL_SLSK_PASS" ]; then echo "\"$FINAL_SLSK_PASS\""; else echo "null"; fi),
   "libraries": [
     {
       "name": "Synology Music Share",
@@ -73,6 +97,18 @@ else
   if [ -n "$MUSIC_DIR" ]; then
     sed -i -E "s|\"download_dir\":[[:space:]]*\"[^\"]*\"|\"download_dir\": \"${MUSIC_DIR}\"|" "$CONFIG_FILE"
     sed -i -E "s|\"path\":[[:space:]]*\"/volume[0-9]+/music\"|\"path\": \"${MUSIC_DIR}\"|" "$CONFIG_FILE"
+  fi
+  if [ -n "$FINAL_SLSK_USER" ]; then
+    if grep -q '"soulseek_username":' "$CONFIG_FILE"; then
+      sed -i -E "s/\"soulseek_username\":[[:space:]]*\"[^\"]*\"/\"soulseek_username\": \"${FINAL_SLSK_USER}\"/" "$CONFIG_FILE"
+      sed -i -E "s/\"soulseek_username\":[[:space:]]*null/\"soulseek_username\": \"${FINAL_SLSK_USER}\"/" "$CONFIG_FILE"
+    fi
+  fi
+  if [ -n "$FINAL_SLSK_PASS" ]; then
+    if grep -q '"soulseek_password":' "$CONFIG_FILE"; then
+      sed -i -E "s/\"soulseek_password\":[[:space:]]*\"[^\"]*\"/\"soulseek_password\": \"${FINAL_SLSK_PASS}\"/" "$CONFIG_FILE"
+      sed -i -E "s/\"soulseek_password\":[[:space:]]*null/\"soulseek_password\": \"${FINAL_SLSK_PASS}\"/" "$CONFIG_FILE"
+    fi
   fi
 fi
 
@@ -118,25 +154,6 @@ mkdir -p "$SLSKD_DIR" "$SLSKD_DIR/incomplete"
 chmod 777 "$SLSKD_DIR" "$SLSKD_DIR/incomplete" 2>/dev/null || true
 
 SLSKD_CFG="${SLSKD_DIR}/slskd.yml"
-EXISTING_USER=""
-EXISTING_PASS=""
-if [ -f "/volume2/docker/slskd/slskd.yml" ]; then
-    EXISTING_USER="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
-    EXISTING_PASS="$(grep -v '^[[:space:]]*#' "/volume2/docker/slskd/slskd.yml" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
-fi
-if [ -z "$EXISTING_PASS" ] && [ -f "$SLSKD_CFG" ]; then
-    EXISTING_PASS="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*password:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
-fi
-if [ -z "$EXISTING_USER" ] && [ -f "$SLSKD_CFG" ]; then
-    EXISTING_USER="$(grep -v '^[[:space:]]*#' "$SLSKD_CFG" | grep -E '^[[:space:]]*username:' | awk '{print $2}' | tr -d ' "' | head -n 1)"
-fi
-
-if [ -n "$EXISTING_PASS" ] && [ -f "$CONFIG_FILE" ]; then
-    sed -i -E "s/\"soulseek_password\":[[:space:]]*null/\"soulseek_password\": \"${EXISTING_PASS}\"/" "$CONFIG_FILE"
-fi
-if [ -n "$EXISTING_USER" ] && [ -f "$CONFIG_FILE" ]; then
-    sed -i -E "s/\"soulseek_username\":[[:space:]]*null/\"soulseek_username\": \"${EXISTING_USER}\"/" "$CONFIG_FILE"
-fi
 
 if [ ! -f "$SLSKD_CFG" ]; then
 cat > "$SLSKD_CFG" << SLSKD_EOF
@@ -154,8 +171,8 @@ shares:
     - "${MUSIC_DIR}"
 
 soulseek:
-  username: "${EXISTING_USER}"
-  password: "${EXISTING_PASS}"
+  username: "${FINAL_SLSK_USER}"
+  password: "${FINAL_SLSK_PASS}"
   listen_port: 50300
   diagnostic_level: Info
 SLSKD_EOF
@@ -171,11 +188,11 @@ shares:
     - "${MUSIC_DIR}"
 SHARES_EOF
   fi
-  if [ -n "$EXISTING_USER" ] && ! grep -q "username: [a-zA-Z0-9]" "$SLSKD_CFG"; then
-    sed -i -E "s|username:.*|username: \"${EXISTING_USER}\"|" "$SLSKD_CFG"
+  if [ -n "$FINAL_SLSK_USER" ]; then
+    sed -i -E "s|username:.*|username: \"${FINAL_SLSK_USER}\"|" "$SLSKD_CFG"
   fi
-  if [ -n "$EXISTING_PASS" ] && ! grep -q "password: [a-zA-Z0-9]" "$SLSKD_CFG"; then
-    sed -i -E "s|password:.*|password: \"${EXISTING_PASS}\"|" "$SLSKD_CFG"
+  if [ -n "$FINAL_SLSK_PASS" ]; then
+    sed -i -E "s|password:.*|password: \"${FINAL_SLSK_PASS}\"|" "$SLSKD_CFG"
   fi
 fi
 chmod 666 "$SLSKD_CFG" 2>/dev/null || true

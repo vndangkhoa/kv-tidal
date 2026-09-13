@@ -139,6 +139,9 @@ async fn update_settings(
         cfg.soulseek_password.as_deref(),
     );
 
+    // Trigger immediate connection to Soulseek network via slskd
+    let _ = state.soulseek.trigger_connect().await;
+
     info!("Settings updated and saved to {:?}", config_path);
     Ok(Json(serde_json::json!({
         "success": true,
@@ -184,7 +187,20 @@ async fn test_tidal_token(
 async fn test_soulseek_connection(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    let status = state.soulseek.check_status().await;
+    let mut status = state.soulseek.check_status().await;
+
+    // If slskd is running but disconnected/connecting, trigger server connect and wait briefly
+    if !status.is_logged_in {
+        let _ = state.soulseek.trigger_connect().await;
+        for _ in 0..5 {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            status = state.soulseek.check_status().await;
+            if status.is_logged_in {
+                break;
+            }
+        }
+    }
+
     if status.connected && status.is_logged_in {
         Json(serde_json::json!({
             "success": true,

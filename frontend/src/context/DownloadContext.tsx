@@ -18,6 +18,7 @@ interface DownloadTrackPayload {
   album: string;
   track_number?: number;
   year?: number;
+  duration?: number;
   cover_url?: string | null;
   stream_url?: string | null;
   track_id?: string | null;
@@ -41,6 +42,8 @@ interface DownloadContextType {
   setIsManagerOpen: (open: boolean) => void;
   downloadTrack: (track: DownloadTrackPayload) => Promise<string | null>;
   cancelJob: (id: string) => Promise<void>;
+  pauseJob: (id: string) => Promise<void>;
+  resumeJob: (id: string) => Promise<void>;
   clearCompleted: () => Promise<void>;
   getTrackDownloadStatus: (title: string, artist: string) => TrackDownloadStatus;
 }
@@ -202,6 +205,24 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const pauseJob = async (id: string) => {
+    try {
+      await fetch(`/api/download/${id}/pause`, { method: "POST" });
+      await fetchQueue();
+    } catch (e) {
+      console.error("Failed pausing job", e);
+    }
+  };
+
+  const resumeJob = async (id: string) => {
+    try {
+      await fetch(`/api/download/${id}/resume`, { method: "POST" });
+      await fetchQueue();
+    } catch (e) {
+      console.error("Failed resuming job", e);
+    }
+  };
+
   const clearCompleted = async () => {
     try {
       await fetch("/api/download/clear", { method: "POST" });
@@ -223,7 +244,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
     }
 
     const isDownloading =
-      job.stage !== "completed" && job.stage !== "failed";
+      job.stage !== "completed" && job.stage !== "failed" && job.stage !== "paused";
     const isDone = job.stage === "completed";
     const isError = job.stage === "failed";
 
@@ -252,6 +273,8 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         setIsManagerOpen,
         downloadTrack,
         cancelJob,
+        pauseJob,
+        resumeJob,
         clearCompleted,
         getTrackDownloadStatus,
       }}

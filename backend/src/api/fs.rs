@@ -1192,7 +1192,7 @@ async fn download_file(
 
 async fn get_cover(
     Query(query): Query<DownloadQuery>,
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
     let path = PathBuf::from(&query.path);
     if !path.exists() {
@@ -1348,6 +1348,67 @@ async fn get_cover(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Fallback: On-demand resolve from Apple Music CDN and cache as cover.jpg
+    let (query_str, target_dir) = if path.is_file() {
+        let parent = path.parent().map(|p| p.to_path_buf());
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let q = if let Some(track) = inspect_audio_file(&path, &ext) {
+            Some(format!("{} {}", track.artist, track.title))
+        } else {
+            path.file_stem().map(|s| s.to_string_lossy().to_string())
+        };
+        (q, parent)
+    } else {
+        let mut q = None;
+        if let Ok(entries) = std::fs::read_dir(&path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    let ext = p
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if matches!(ext.as_str(), "flac" | "mp3" | "m4a" | "wav" | "alac" | "ogg") {
+                        if let Some(track) = inspect_audio_file(&p, &ext) {
+                            q = Some(format!("{} {}", track.artist, track.album));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if q.is_none() {
+            q = path.file_name().map(|s| s.to_string_lossy().to_string());
+        }
+        (q, Some(path.clone()))
+    };
+
+    if let (Some(q), Some(dir)) = (query_str, target_dir) {
+        if !q.trim().is_empty() {
+            if let Some(meta) = state.metadata.resolve_apple_music(&q).await {
+                if let Some(ref c_url) = meta.cover_url {
+                    if let Ok(bytes) = state.metadata.download_image_bytes(c_url).await {
+                        let cover_path = dir.join("cover.jpg");
+                        let _ = tokio::fs::write(&cover_path, &bytes).await;
+                        return Ok((
+                            [
+                                (header::CONTENT_TYPE, "image/jpeg"),
+                                (header::CACHE_CONTROL, "public, max-age=86400"),
+                            ],
+                            bytes,
+                        )
+                            .into_response());
                     }
                 }
             }

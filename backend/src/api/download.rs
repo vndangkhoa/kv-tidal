@@ -24,6 +24,7 @@ pub enum DownloadStage {
     IndexingLibrary,
     Completed,
     Failed,
+    Paused,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,10 +35,13 @@ pub struct DownloadJob {
     pub album: String,
     pub track_number: Option<u32>,
     pub year: Option<u32>,
+    pub duration: Option<u32>,
     pub cover_url: Option<String>,
     pub stream_url: Option<String>,
     pub track_id: Option<String>,
     pub source: Option<String>,
+    pub slskd_username: Option<String>,
+    pub slskd_id: Option<String>,
     pub stage: DownloadStage,
     pub progress_percent: u8,
     pub downloaded_bytes: u64,
@@ -46,6 +50,7 @@ pub struct DownloadJob {
     pub eta_seconds: Option<u64>,
     pub error: Option<String>,
     pub saved_path: Option<String>,
+    pub request_payload: Option<DownloadRequest>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -61,13 +66,14 @@ pub fn new_download_queue() -> SharedDownloadQueue {
     Arc::new(RwLock::new(DownloadQueue::default()))
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DownloadRequest {
     pub title: String,
     pub artist: String,
     pub album: String,
     pub track_number: Option<u32>,
     pub year: Option<u32>,
+    pub duration: Option<u32>,
     pub cover_url: Option<String>,
     pub stream_url: Option<String>,
     pub track_id: Option<String>,
@@ -128,6 +134,7 @@ async fn fetch_audio_from_url_streaming(
     url: &str,
     state: &AppState,
     job_id: &str,
+    token: &tokio_util::sync::CancellationToken,
 ) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0")
@@ -147,8 +154,18 @@ async fn fetch_audio_from_url_streaming(
     let start_time = tokio::time::Instant::now();
     let mut last_update = tokio::time::Instant::now();
 
-    while let Some(chunk_res) = stream.next().await {
-        let chunk = chunk_res.map_err(|e| e.to_string())?;
+    loop {
+        let chunk_opt = tokio::select! {
+            _ = token.cancelled() => return Err("Download cancelled or paused".to_string()),
+            next = stream.next() => next,
+        };
+
+        let chunk = match chunk_opt {
+            Some(Ok(c)) => c,
+            Some(Err(e)) => return Err(e.to_string()),
+            None => break,
+        };
+
         downloaded += chunk.len() as u64;
         buffer.extend_from_slice(&chunk);
 
@@ -181,11 +198,71 @@ async fn fetch_audio_from_url_streaming(
     Ok(buffer)
 }
 
-async fn run_download_pipeline(state: AppState, job_id: String, payload: DownloadRequest) {
+async fn convert_audio_to_flac(input_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let temp_dir = std::env::temp_dir();
+    let id = uuid::Uuid::new_v4();
+    let in_file = temp_dir.join(format!("kv_dl_in_{}.tmp", id));
+    let out_file = temp_dir.join(format!("kv_dl_out_{}.flac", id));
+
+    tokio::fs::write(&in_file, input_bytes)
+        .await
+        .map_err(|e| format!("Failed to write temp audio file: {}", e))?;
+
+    let res = tokio::process::Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            in_file.to_str().unwrap_or(""),
+            "-c:a",
+            "flac",
+            out_file.to_str().unwrap_or(""),
+        ])
+        .output()
+        .await;
+
+    let _ = tokio::fs::remove_file(&in_file).await;
+
+    match res {
+        Ok(output) if output.status.success() => {
+            let flac_bytes = tokio::fs::read(&out_file)
+                .await
+                .map_err(|e| format!("Failed to read transcoded flac file: {}", e))?;
+            let _ = tokio::fs::remove_file(&out_file).await;
+            if flac_bytes.len() >= 1024 {
+                Ok(flac_bytes)
+            } else {
+                Err("Transcoded FLAC output too small".into())
+            }
+        }
+        Ok(output) => {
+            let _ = tokio::fs::remove_file(&out_file).await;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("ffmpeg transcode failed: {}", stderr))
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&out_file).await;
+            Err(format!("ffmpeg command execution failed: {}", e))
+        }
+    }
+}
+
+async fn run_download_pipeline(
+    state: AppState,
+    job_id: String,
+    payload: DownloadRequest,
+    token: tokio_util::sync::CancellationToken,
+) {
     let _permit = match state.download_semaphore.acquire().await {
         Ok(p) => p,
         Err(_) => return,
     };
+
+    if token.is_cancelled() {
+        return;
+    }
 
     info!("Starting background download for '{} - {}' (Job ID: {})", payload.artist, payload.title, job_id);
 
@@ -208,149 +285,267 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
 
     let mut audio_bytes_opt = None;
 
-    // Priority 1: Direct Tidal HiFi Stream (if token is available)
-    if let Some(ref id) = payload.track_id {
-        if let Ok(tidal_url) = state.tidal.resolve_stream_url(id, None).await {
-            info!("Resolved direct Tidal HiFi stream URL for track download: {}", id);
-            {
-                let mut q = state.download_queue.write().await;
-                if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
-                    job.source = Some("tidal".to_string());
-                }
-            }
-            if let Ok(bytes) = fetch_audio_from_url_streaming(&tidal_url, &state, &job_id).await {
-                audio_bytes_opt = Some(bytes);
-            }
+    // Priority 1: Pure Bit-Perfect Lossless Soulseek P2P Retrieval (Default)
+    {
+        let mut q = state.download_queue.write().await;
+        if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+            job.source = Some("soulseek".to_string());
         }
     }
 
-    // Priority 2: Pure Bit-Perfect Lossless Soulseek P2P Retrieval
-    if audio_bytes_opt.is_none() {
-        {
-            let mut q = state.download_queue.write().await;
-            if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
-                job.source = Some("soulseek".to_string());
-            }
-        }
-        info!("Searching Soulseek network for authentic FLAC: {} - {}", payload.artist, payload.title);
-        match state.soulseek.search_flac(&payload.artist, &payload.title).await {
-            Ok(candidates) if !candidates.is_empty() => {
-                info!("Found {} lossless FLAC candidates on Soulseek", candidates.len());
-                let download_base_path = std::path::PathBuf::from(&download_dir);
+    let slsk_query = crate::engines::soulseek::SoulseekTrackQuery {
+        artist: payload.artist.clone(),
+        title: payload.title.clone(),
+        album: if payload.album.trim().is_empty() { None } else { Some(payload.album.clone()) },
+        track_number: payload.track_number,
+        duration_secs: payload.duration,
+    };
 
-                // Try candidates (up to 3 best candidates)
-                for candidate in candidates.iter().take(3) {
-                    info!(
-                        "Attempting Soulseek download from user '{}': {} ({} bytes, {} bit, {} Hz)",
-                        candidate.username,
-                        candidate.filename,
-                        candidate.size,
-                        candidate.bit_depth.unwrap_or(16),
-                        candidate.sample_rate.unwrap_or(44100)
-                    );
+    info!(
+        "Searching Soulseek network for authentic FLAC: {} - {} (album: {:?}, track: {:?}, dur: {:?}s)",
+        slsk_query.artist, slsk_query.title, slsk_query.album, slsk_query.track_number, slsk_query.duration_secs
+    );
 
-                    if let Err(e) = state.soulseek.queue_download(&candidate.username, &candidate.filename, candidate.size).await {
-                        warn!("Failed to queue Soulseek download from user '{}': {}", candidate.username, e);
-                        continue;
+    match state.soulseek.search_flac(&slsk_query).await {
+        Ok(candidates) if !candidates.is_empty() => {
+            info!("Found {} scored lossless FLAC candidates on Soulseek", candidates.len());
+            let download_base_path = std::path::PathBuf::from(&download_dir);
+
+            // Try candidates (up to 3 best candidates)
+            for candidate in candidates.iter().take(3) {
+                if token.is_cancelled() {
+                    break;
+                }
+
+                info!(
+                    "Attempting Soulseek download from user '{}': {} (score: {}, {} bytes, {} bit, {} Hz)",
+                    candidate.username,
+                    candidate.filename,
+                    candidate.score,
+                    candidate.size,
+                    candidate.bit_depth.unwrap_or(16),
+                    candidate.sample_rate.unwrap_or(44100)
+                );
+
+                {
+                    let mut q = state.download_queue.write().await;
+                    if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+                        job.slskd_username = Some(candidate.username.clone());
+                    }
+                }
+
+                if let Err(e) = state.soulseek.queue_download(&candidate.username, &candidate.filename, candidate.size).await {
+                    warn!("Failed to queue Soulseek download from user '{}': {}", candidate.username, e);
+                    continue;
+                }
+
+                // Poll transfer status up to 300 seconds
+                let poll_start = tokio::time::Instant::now();
+                let mut completed_ok = false;
+
+                while poll_start.elapsed() < Duration::from_secs(300) {
+                    if token.is_cancelled() {
+                        info!("Download job {} cancelled or paused during polling", job_id);
+                        break;
                     }
 
-                    // Poll transfer status up to 300 seconds
-                    let poll_start = tokio::time::Instant::now();
-                    let mut completed_ok = false;
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            info!("Download job {} token cancelled during sleep", job_id);
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(1000)) => {}
+                    }
 
-                    while poll_start.elapsed() < Duration::from_secs(300) {
-                        tokio::time::sleep(Duration::from_millis(1000)).await;
-
-                        match state.soulseek.poll_download_status(&candidate.username, &candidate.filename).await {
-                            Ok(status) => {
-                                let mapped_pct = (status.percent_complete.clamp(1.0, 100.0) as u8).min(95);
-                                let eta = if status.speed_bytes > 0 && status.size > status.bytes_transferred {
-                                    Some((status.size - status.bytes_transferred) / status.speed_bytes)
-                                } else {
-                                    None
-                                };
-
-                                update_job_telemetry(
-                                    &state,
-                                    &job_id,
-                                    status.bytes_transferred,
-                                    Some(status.size),
-                                    Some(status.speed_bytes / 1024),
-                                    eta,
-                                    mapped_pct,
-                                ).await;
-
-                                if status.is_completed {
-                                    info!("Soulseek transfer completed for '{}'", candidate.filename);
-                                    completed_ok = true;
-                                    break;
-                                }
-
-                                if status.is_failed {
-                                    warn!("Soulseek transfer failed for '{}': {:?}", candidate.filename, status.error);
-                                    break;
+                    match state.soulseek.poll_download_status(&candidate.username, &candidate.filename).await {
+                        Ok(status) => {
+                            if let Some(ref tid) = status.id {
+                                let mut q = state.download_queue.write().await;
+                                if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+                                    job.slskd_id = Some(tid.clone());
+                                    if job.slskd_username.is_none() {
+                                        job.slskd_username = status.username.clone();
+                                    }
                                 }
                             }
-                            Err(_) => {
-                                // Check if the file is already finished and present on disk
-                                if let Some(local_path) = crate::engines::soulseek::find_downloaded_file_on_disk(
-                                    &download_base_path,
-                                    &candidate.username,
-                                    &candidate.filename,
-                                ).await {
-                                    if let Ok(meta) = tokio::fs::metadata(&local_path).await {
-                                        if meta.len() >= 1024 {
-                                            completed_ok = true;
-                                            break;
-                                        }
+
+                            if status.is_paused {
+                                info!("Soulseek transfer is paused for '{}'", candidate.filename);
+                                break;
+                            }
+
+                            let mapped_pct = (status.percent_complete.clamp(1.0, 100.0) as u8).min(95);
+                            let eta = if status.speed_bytes > 0 && status.size > status.bytes_transferred {
+                                Some((status.size - status.bytes_transferred) / status.speed_bytes)
+                            } else {
+                                None
+                            };
+
+                            update_job_telemetry(
+                                &state,
+                                &job_id,
+                                status.bytes_transferred,
+                                Some(status.size),
+                                Some(status.speed_bytes / 1024),
+                                eta,
+                                mapped_pct,
+                            ).await;
+
+                            if status.is_completed {
+                                info!("Soulseek transfer completed for '{}'", candidate.filename);
+                                completed_ok = true;
+                                break;
+                            }
+
+                            if status.is_failed {
+                                warn!("Soulseek transfer failed for '{}': {:?}", candidate.filename, status.error);
+                                break;
+                            }
+                        }
+                        Err(_) => {
+                            // Check if the file is already finished and present on disk
+                            if let Some(local_path) = crate::engines::soulseek::find_downloaded_file_on_disk(
+                                &download_base_path,
+                                &candidate.username,
+                                &candidate.filename,
+                            ).await {
+                                if let Ok(meta) = tokio::fs::metadata(&local_path).await {
+                                    if meta.len() >= 1024 {
+                                        completed_ok = true;
+                                        break;
                                     }
                                 }
                             }
                         }
                     }
+                }
 
-                    if completed_ok {
-                        // Locate and read the completed file from disk
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        if let Some(local_path) = crate::engines::soulseek::find_downloaded_file_on_disk(
-                            &download_base_path,
-                            &candidate.username,
-                            &candidate.filename,
-                        ).await {
-                            match tokio::fs::read(&local_path).await {
-                                Ok(bytes) if bytes.len() >= 1024 => {
-                                    info!(
-                                        "Successfully read {} bytes genuine FLAC from {:?}",
-                                        bytes.len(),
-                                        local_path
-                                    );
-                                    let _ = tokio::fs::remove_file(&local_path).await;
-                                    audio_bytes_opt = Some(bytes);
-                                    break;
-                                }
-                                Ok(_) => warn!("Downloaded file too small: {:?}", local_path),
-                                Err(e) => warn!("Failed reading downloaded file {:?}: {}", local_path, e),
+                if completed_ok {
+                    // Locate and read the completed file from disk
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    if let Some(local_path) = crate::engines::soulseek::find_downloaded_file_on_disk(
+                        &download_base_path,
+                        &candidate.username,
+                        &candidate.filename,
+                    ).await {
+                        match tokio::fs::read(&local_path).await {
+                            Ok(bytes) if bytes.len() >= 1024 => {
+                                info!(
+                                    "Successfully read {} bytes genuine FLAC from {:?}",
+                                    bytes.len(),
+                                    local_path
+                                );
+                                let _ = tokio::fs::remove_file(&local_path).await;
+                                audio_bytes_opt = Some(bytes);
+                                break;
                             }
-                        } else {
-                            warn!("Completed file not found on disk for '{}'", candidate.filename);
+                            Ok(_) => warn!("Downloaded file too small: {:?}", local_path),
+                            Err(e) => warn!("Failed reading downloaded file {:?}: {}", local_path, e),
+                        }
+                    } else {
+                        warn!("Completed file not found on disk for '{}'", candidate.filename);
+                    }
+                }
+            }
+        }
+        Ok(_) => {
+            info!("No FLAC candidates found on Soulseek for '{} - {}'", payload.artist, payload.title);
+        }
+        Err(e) => {
+            warn!("Soulseek search error: {}", e);
+        }
+    }
+
+    if token.is_cancelled() {
+        let is_paused = {
+            let q = state.download_queue.read().await;
+            q.jobs.iter().find(|j| j.id == job_id).map(|j| j.stage == DownloadStage::Paused).unwrap_or(false)
+        };
+        if is_paused {
+            info!("Pipeline for job {} terminated cleanly due to pause", job_id);
+            return;
+        }
+    }
+
+    // Priority 2: Direct Tidal HiFi Stream (if Soulseek yielded no FLAC)
+    if audio_bytes_opt.is_none() && !token.is_cancelled() {
+        if let Some(ref id) = payload.track_id {
+            if let Ok(tidal_url) = state.tidal.resolve_stream_url(id, None).await {
+                info!("Resolved direct Tidal HiFi stream URL for track download: {}", id);
+                {
+                    let mut q = state.download_queue.write().await;
+                    if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+                        job.source = Some("tidal".to_string());
+                    }
+                }
+                if let Ok(bytes) = fetch_audio_from_url_streaming(&tidal_url, &state, &job_id, &token).await {
+                    audio_bytes_opt = Some(bytes);
+                }
+            }
+        }
+    }
+
+    // Priority 3: Fallback to Web Stream Audio (Transcode to FLAC)
+    if audio_bytes_opt.is_none() && !token.is_cancelled() {
+        let stream_url = if let Some(ref u) = payload.stream_url {
+            if !u.trim().is_empty() {
+                Some(u.clone())
+            } else {
+                state.resolver.resolve_full_stream(&payload.artist, &payload.title).await
+            }
+        } else {
+            state.resolver.resolve_full_stream(&payload.artist, &payload.title).await
+        };
+
+        if let Some(ref s_url) = stream_url {
+            info!("Attempting Priority 3 Web Stream audio download for '{} - {}'", payload.artist, payload.title);
+            {
+                let mut q = state.download_queue.write().await;
+                if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+                    job.source = Some("web-stream".to_string());
+                }
+            }
+            if let Ok(raw_bytes) = fetch_audio_from_url_streaming(s_url, &state, &job_id, &token).await {
+                if raw_bytes.starts_with(b"fLaC") {
+                    audio_bytes_opt = Some(raw_bytes);
+                } else {
+                    match convert_audio_to_flac(&raw_bytes).await {
+                        Ok(flac_bytes) => {
+                            info!(
+                                "Transcoded web stream ({} bytes) to lossless FLAC container ({} bytes)",
+                                raw_bytes.len(),
+                                flac_bytes.len()
+                            );
+                            audio_bytes_opt = Some(flac_bytes);
+                        }
+                        Err(e) => {
+                            warn!("Failed transcoding web stream to FLAC: {}. Using raw audio bytes.", e);
+                            audio_bytes_opt = Some(raw_bytes);
                         }
                     }
                 }
             }
-            Ok(_) => {
-                info!("No FLAC candidates found on Soulseek for '{} - {}'", payload.artist, payload.title);
-            }
-            Err(e) => {
-                warn!("Soulseek search error: {}", e);
-            }
         }
+    }
+
+    if token.is_cancelled() {
+        let is_paused = {
+            let q = state.download_queue.read().await;
+            q.jobs.iter().find(|j| j.id == job_id).map(|j| j.stage == DownloadStage::Paused).unwrap_or(false)
+        };
+        if is_paused {
+            info!("Pipeline for job {} terminated cleanly due to pause", job_id);
+            return;
+        }
+        info!("Pipeline for job {} terminated due to cancellation", job_id);
+        return;
     }
 
     let audio_bytes = match audio_bytes_opt {
         Some(b) => b,
         None => {
             let err_msg = format!(
-                "Lossless download failed: No authentic studio FLAC found on Soulseek network for '{} - {}'",
+                "Download failed: No authentic audio found on Soulseek, Tidal, or Web Stream for '{} - {}'",
                 payload.artist, payload.title
             );
             error!("{}", err_msg);
@@ -362,11 +557,25 @@ async fn run_download_pipeline(state: AppState, job_id: String, payload: Downloa
     // Stage 3: Tagging and Writing
     update_job_stage(&state, &job_id, DownloadStage::TaggingAndWriting, 85, None, None).await;
 
-    let cover_bytes = if let Some(ref curl) = payload.cover_url {
-        state.metadata.download_image_bytes(curl).await.ok()
+    let mut cover_bytes = if let Some(ref curl) = payload.cover_url {
+        if curl.starts_with("http://") || curl.starts_with("https://") {
+            state.metadata.download_image_bytes(curl).await.ok()
+        } else {
+            None
+        }
     } else {
         None
     };
+
+    // Fallback: If no cover URL was provided or download failed, resolve 1000x1000 cover from Apple Music CDN
+    if cover_bytes.is_none() {
+        let query = format!("{} {}", payload.artist, payload.title);
+        if let Some(meta) = state.metadata.resolve_apple_music(&query).await {
+            if let Some(ref c_url) = meta.cover_url {
+                cover_bytes = state.metadata.download_image_bytes(c_url).await.ok();
+            }
+        }
+    }
 
     let saved_path_res = save_track_atomic(TrackSaveOptions {
         base_dir: &download_dir,
@@ -490,6 +699,13 @@ async fn handle_download(
 
     let job_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
+    let token = tokio_util::sync::CancellationToken::new();
+
+    {
+        let mut tokens = state.download_tokens.write().await;
+        tokens.insert(job_id.clone(), token.clone());
+    }
+
     let job = DownloadJob {
         id: job_id.clone(),
         title: payload.title.clone(),
@@ -497,10 +713,13 @@ async fn handle_download(
         album: payload.album.clone(),
         track_number: payload.track_number,
         year: payload.year,
+        duration: payload.duration,
         cover_url: payload.cover_url.clone(),
         stream_url: payload.stream_url.clone(),
         track_id: payload.track_id.clone(),
         source: payload.source.clone(),
+        slskd_username: None,
+        slskd_id: None,
         stage: DownloadStage::Queued,
         progress_percent: 0,
         downloaded_bytes: 0,
@@ -509,6 +728,7 @@ async fn handle_download(
         eta_seconds: None,
         error: None,
         saved_path: None,
+        request_payload: Some(payload.clone()),
         created_at: now,
         updated_at: now,
     };
@@ -526,7 +746,7 @@ async fn handle_download(
     let payload_clone = payload.clone();
 
     tokio::spawn(async move {
-        run_download_pipeline(state_clone, job_id_clone, payload_clone).await;
+        run_download_pipeline(state_clone, job_id_clone, payload_clone, token).await;
     });
 
     Ok(Json(serde_json::json!({
@@ -554,13 +774,25 @@ async fn get_download_queue(
                 .unwrap_or(&transfer.filename);
 
             // Check if this transfer matches any existing job in queue
-            let already_present = jobs.iter().any(|j| {
-                clean_name.to_lowercase().contains(&j.title.to_lowercase())
+            let existing_idx = jobs.iter().position(|j| {
+                (transfer.id.is_some() && j.slskd_id == transfer.id)
+                    || clean_name.to_lowercase().contains(&j.title.to_lowercase())
                     || file_name.to_lowercase().contains(&j.title.to_lowercase())
                     || j.id.contains(&clean_name)
             });
 
-            if !already_present && !transfer.is_completed {
+            if let Some(idx) = existing_idx {
+                if jobs[idx].slskd_id.is_none() && transfer.id.is_some() {
+                    jobs[idx].slskd_id = transfer.id.clone();
+                }
+                if jobs[idx].slskd_username.is_none() && transfer.username.is_some() {
+                    jobs[idx].slskd_username = transfer.username.clone();
+                }
+                // If the job is Paused, respect user's pause state
+                if jobs[idx].stage == DownloadStage::Paused {
+                    continue;
+                }
+            } else if !transfer.is_completed && !transfer.is_paused {
                 let file_stem = std::path::Path::new(file_name)
                     .file_stem()
                     .and_then(|s| s.to_str())
@@ -599,10 +831,13 @@ async fn get_download_queue(
                     album: "Soulseek P2P Lossless".to_string(),
                     track_number: None,
                     year: None,
+                    duration: None,
                     cover_url: None,
                     stream_url: None,
                     track_id: None,
                     source: Some("soulseek".to_string()),
+                    slskd_username: transfer.username.clone(),
+                    slskd_id: transfer.id.clone(),
                     stage,
                     progress_percent: transfer.percent_complete as u8,
                     downloaded_bytes: transfer.bytes_transferred,
@@ -611,6 +846,7 @@ async fn get_download_queue(
                     eta_seconds: eta,
                     error: transfer.error,
                     saved_path: None,
+                    request_payload: None,
                     created_at: chrono::Utc::now().timestamp(),
                     updated_at: chrono::Utc::now().timestamp(),
                 };
@@ -637,15 +873,148 @@ async fn get_download_status(
     }
 }
 
+// POST /api/download/:id/pause
+async fn pause_download_job(
+    State(state): State<AppState>,
+    AxumPath(job_id): AxumPath<String>,
+) -> Json<serde_json::Value> {
+    // 1. Cancel token to halt Tokio loop
+    {
+        let tokens = state.download_tokens.read().await;
+        if let Some(token) = tokens.get(&job_id) {
+            token.cancel();
+        }
+    }
+
+    // 2. Set job stage to Paused
+    let slsk_info = {
+        let mut q = state.download_queue.write().await;
+        if let Some(job) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+            job.stage = DownloadStage::Paused;
+            job.speed_kbps = Some(0);
+            job.eta_seconds = None;
+            job.updated_at = chrono::Utc::now().timestamp();
+            job.slskd_username.clone().zip(job.slskd_id.clone())
+        } else {
+            None
+        }
+    };
+
+    // 3. Signal slskd to cancel the transfer without deleting incomplete bytes (remove=false)
+    if let Some((user, tid)) = slsk_info {
+        let _ = state.soulseek.cancel_transfer(&user, &tid, false).await;
+    }
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "job_id": job_id,
+        "stage": "paused",
+    }))
+}
+
+// POST /api/download/:id/resume
+async fn resume_download_job(
+    State(state): State<AppState>,
+    AxumPath(job_id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let job_opt = {
+        let q = state.download_queue.read().await;
+        q.jobs.iter().find(|j| j.id == job_id).cloned()
+    };
+
+    let job = match job_opt {
+        Some(j) => j,
+        None => return Err(StatusCode::NOT_FOUND),
+    };
+
+    let payload = match job.request_payload {
+        Some(p) => p,
+        None => DownloadRequest {
+            title: job.title.clone(),
+            artist: job.artist.clone(),
+            album: job.album.clone(),
+            track_number: job.track_number,
+            year: job.year,
+            duration: job.duration,
+            cover_url: job.cover_url.clone(),
+            stream_url: job.stream_url.clone(),
+            track_id: job.track_id.clone(),
+            source: job.source.clone(),
+        },
+    };
+
+    // Instantiate a new cancellation token
+    let new_token = tokio_util::sync::CancellationToken::new();
+    {
+        let mut tokens = state.download_tokens.write().await;
+        tokens.insert(job_id.clone(), new_token.clone());
+    }
+
+    // Set stage back to Queued
+    {
+        let mut q = state.download_queue.write().await;
+        if let Some(j) = q.jobs.iter_mut().find(|j| j.id == job_id) {
+            j.stage = DownloadStage::Queued;
+            j.error = None;
+            j.updated_at = chrono::Utc::now().timestamp();
+        }
+    }
+
+    let state_clone = state.clone();
+    let job_id_clone = job_id.clone();
+    tokio::spawn(async move {
+        run_download_pipeline(state_clone, job_id_clone, payload, new_token).await;
+    });
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "job_id": job_id,
+        "stage": "queued",
+    })))
+}
+
 // DELETE /api/download/:id
 async fn delete_download_job(
     State(state): State<AppState>,
     AxumPath(job_id): AxumPath<String>,
 ) -> Json<serde_json::Value> {
-    let mut q = state.download_queue.write().await;
-    let initial_len = q.jobs.len();
-    q.jobs.retain(|j| j.id != job_id);
-    let removed = q.jobs.len() < initial_len;
+    // 1. Cancel token
+    {
+        let mut tokens = state.download_tokens.write().await;
+        if let Some(token) = tokens.remove(&job_id) {
+            token.cancel();
+        }
+    }
+
+    // 2. Remove job from in-memory queue & extract slskd transfer info
+    let (removed, slsk_info) = {
+        let mut q = state.download_queue.write().await;
+        let job_info = q.jobs.iter().find(|j| j.id == job_id).and_then(|j| {
+            j.slskd_username.clone().zip(j.slskd_id.clone())
+        });
+        let initial_len = q.jobs.len();
+        q.jobs.retain(|j| j.id != job_id);
+        (q.jobs.len() < initial_len, job_info)
+    };
+
+    // 3. Signal slskd to remove transfer completely (remove=true)
+    if let Some((user, tid)) = slsk_info {
+        let _ = state.soulseek.cancel_transfer(&user, &tid, true).await;
+    } else {
+        // Fallback for raw slsk-xxx items
+        if let Ok(active) = state.soulseek.get_active_downloads().await {
+            for t in active {
+                if let (Some(u), Some(tid)) = (t.username, t.id) {
+                    let clean = t.filename.replace('\\', "/");
+                    let calc_id = format!("slsk-{:x}", md5::compute(clean.as_bytes()));
+                    if calc_id == job_id {
+                        let _ = state.soulseek.cancel_transfer(&u, &tid, true).await;
+                    }
+                }
+            }
+        }
+    }
+
     Json(serde_json::json!({
         "status": if removed { "ok" } else { "not_found" },
         "job_id": job_id,
@@ -660,6 +1029,10 @@ async fn clear_completed_downloads(
     let before = q.jobs.len();
     q.jobs.retain(|j| j.stage != DownloadStage::Completed && j.stage != DownloadStage::Failed);
     let cleared = before - q.jobs.len();
+
+    // Clear completed/cancelled transfers in slskd
+    let _ = state.soulseek.clear_completed_transfers().await;
+
     Json(serde_json::json!({
         "status": "ok",
         "cleared_count": cleared,
@@ -672,4 +1045,6 @@ pub fn router() -> Router<AppState> {
         .route("/queue", get(get_download_queue))
         .route("/clear", post(clear_completed_downloads))
         .route("/{id}", get(get_download_status).delete(delete_download_job))
+        .route("/{id}/pause", post(pause_download_job))
+        .route("/{id}/resume", post(resume_download_job))
 }

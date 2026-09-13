@@ -13,6 +13,7 @@ import {
   Sliders,
   ShieldCheck,
   Download,
+  HardDrive,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { usePlayer } from "@/context/PlayerContext";
@@ -169,6 +170,24 @@ export function Header() {
             <Sparkles className="w-3 h-3 text-primary animate-pulse ml-0.5" />
           </button>
 
+          {/* Mobile Compact DAC Indicator */}
+          {currentTrack && (
+            <button
+              onClick={() => setIsSignalPathOpen(true)}
+              title="Inspect Bit-Perfect Hardware Signal Chain"
+              className="flex sm:hidden items-center space-x-1 px-2 py-0.5 rounded-full bg-card/90 border border-border text-[10px] font-mono text-primary cursor-pointer"
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  bitPerfectMode
+                    ? "bg-emerald-400 shadow-[0_0_4px_#10b981]"
+                    : "bg-purple-400 shadow-[0_0_4px_#a855f7]"
+                }`}
+              />
+              <span>{sampleRateKhz}k</span>
+            </button>
+          )}
+
           {/* Synology NAS & Soulseek P2P Download Manager Trigger */}
           {activeJobs.length > 0 ? (
             (() => {
@@ -248,9 +267,19 @@ export function Header() {
             </button>
           )}
 
+          {/* Direct NAS File Browser Shortcut */}
+          <Link
+            href="/files/"
+            className="p-2 rounded-full hover:bg-card text-textSecondary hover:text-white transition-colors cursor-pointer"
+            title="Synology NAS File Explorer"
+          >
+            <HardDrive className="w-4 h-4" />
+          </Link>
+
+          {/* Desktop Settings Link (Hidden on mobile since bottom navigation bar has Settings tab) */}
           <Link
             href="/settings/"
-            className="p-2 rounded-full hover:bg-card text-textSecondary hover:text-white transition-colors cursor-pointer"
+            className="hidden md:inline-flex p-2 rounded-full hover:bg-card text-textSecondary hover:text-white transition-colors cursor-pointer"
             title="Synology NAS, ALSA DAC & Subsonic Settings"
           >
             <Settings className="w-4 h-4" />

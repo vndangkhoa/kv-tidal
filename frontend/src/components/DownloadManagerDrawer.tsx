@@ -17,6 +17,8 @@ import {
   Database,
   Radio,
   Disc,
+  Play,
+  Pause,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -51,6 +53,13 @@ function getStageBadge(stage: DownloadStage, source?: string) {
           <span>Queued</span>
         </span>
       );
+    case "paused":
+      return (
+        <span className="flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">
+          <Pause className="w-2.5 h-2.5" />
+          <span>Paused</span>
+        </span>
+      );
     case "resolving":
       return (
         <span className="flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
@@ -62,7 +71,13 @@ function getStageBadge(stage: DownloadStage, source?: string) {
       return (
         <span className="flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-300 border border-cyan-500/40">
           <Loader2 className="w-2.5 h-2.5 animate-spin" />
-          <span>{source === "soulseek" ? "Soulseek P2P FLAC" : "Lossless FLAC"}</span>
+          <span>
+            {source === "soulseek"
+              ? "Soulseek P2P FLAC"
+              : source === "web-stream"
+              ? "Web Stream FLAC"
+              : "Lossless FLAC"}
+          </span>
         </span>
       );
     case "tagging_and_writing":
@@ -104,6 +119,8 @@ export function DownloadManagerDrawer() {
     activeJobs,
     completedJobs,
     cancelJob,
+    pauseJob,
+    resumeJob,
     clearCompleted,
   } = useDownloads();
 
@@ -188,7 +205,13 @@ export function DownloadManagerDrawer() {
 
                   <div className="space-y-2.5">
                     {activeJobs.map((job) => (
-                      <ActiveJobCard key={job.id} job={job} onCancel={cancelJob} />
+                      <ActiveJobCard
+                        key={job.id}
+                        job={job}
+                        onCancel={cancelJob}
+                        onPause={pauseJob}
+                        onResume={resumeJob}
+                      />
                     ))}
                   </div>
                 </div>
@@ -235,9 +258,13 @@ export function DownloadManagerDrawer() {
 function ActiveJobCard({
   job,
   onCancel,
+  onPause,
+  onResume,
 }: {
   job: DownloadJob;
   onCancel: (id: string) => void;
+  onPause: (id: string) => void;
+  onResume: (id: string) => void;
 }) {
   const speedText = formatSpeed(job.speed_kbps);
   const etaText = formatEta(job.eta_seconds);
@@ -279,15 +306,38 @@ function ActiveJobCard({
               <span className="inline-flex items-center space-x-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/50 mt-1">
                 <span>Tidal HiFi Direct</span>
               </span>
+            ) : job.source === "web-stream" ? (
+              <span className="inline-flex items-center space-x-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-400 border border-amber-800/50 mt-1">
+                <span>Web Stream Audio</span>
+              </span>
             ) : null}
           </div>
         </div>
 
-        <div className="flex items-center space-x-2 flex-shrink-0">
+        <div className="flex items-center space-x-1.5 flex-shrink-0">
           {getStageBadge(job.stage, job.source)}
+
+          {job.stage === "paused" ? (
+            <button
+              onClick={() => onResume(job.id)}
+              title="Resume download"
+              className="p-1 rounded text-primary hover:text-white hover:bg-primary/20 border border-primary/30 transition-colors cursor-pointer"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+            </button>
+          ) : job.stage !== "completed" && job.stage !== "failed" ? (
+            <button
+              onClick={() => onPause(job.id)}
+              title="Pause download"
+              className="p-1 rounded text-amber-400 hover:text-white hover:bg-amber-500/20 border border-amber-500/30 transition-colors cursor-pointer"
+            >
+              <Pause className="w-3.5 h-3.5" />
+            </button>
+          ) : null}
+
           <button
             onClick={() => onCancel(job.id)}
-            title="Cancel download"
+            title="Remove download"
             className="p-1 rounded text-textSecondary hover:text-rose-400 hover:bg-surface transition-colors cursor-pointer"
           >
             <X className="w-3.5 h-3.5" />

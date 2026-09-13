@@ -52,13 +52,13 @@ start_daemon() {
                 export SLSKD_NO_VERSION_CHECK="true"
                 export SLSKD_NO_COLOR="true"
                 export SLSKD_NO_HTTPS="true"
-                nohup "$SLSKD_BIN" --no-https >> "$SLSKD_LOG" 2>&1 &
+                nohup "$SLSKD_BIN" --no-https </dev/null >> "$SLSKD_LOG" 2>&1 &
                 echo $! > "$SLSKD_PID"
             fi
         fi
     fi
 
-    nohup "$DAEMON" >> "$LOG_FILE" 2>&1 &
+    nohup "$DAEMON" </dev/null >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
 }
 

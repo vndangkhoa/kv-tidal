@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
 import { AudioPlayer } from "@/components/AudioPlayer";
+import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 
 export const viewport: Viewport = {
   themeColor: "#000000",
@@ -71,6 +72,9 @@ export default function RootLayout({
 
             {/* Synology NAS Download Manager Drawer */}
             <DownloadManagerDrawer />
+
+            {/* PWA Service Worker Registration & Notification Sync */}
+            <ServiceWorkerRegister />
           </DownloadProvider>
         </PlayerProvider>
       </body>

@@ -121,22 +121,53 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load_or_create<P: AsRef<Path>>(path: P) -> Self {
         let p = path.as_ref();
-        if p.exists() {
+        let mut cfg = if p.exists() {
             if let Ok(content) = std::fs::read_to_string(p) {
                 if let Ok(cfg) = serde_json::from_str::<AppConfig>(&content) {
-                    return cfg;
+                    cfg
+                } else {
+                    AppConfig::default()
                 }
+            } else {
+                AppConfig::default()
+            }
+        } else {
+            let default_cfg = AppConfig::default();
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(json) = serde_json::to_string_pretty(&default_cfg) {
+                let _ = std::fs::write(p, json);
+            }
+            default_cfg
+        };
+
+        // Environment overrides
+        if let Ok(port_str) = std::env::var("PORT") {
+            if let Ok(port) = port_str.parse() {
+                cfg.port = port;
             }
         }
+        if let Ok(host) = std::env::var("HOST") {
+            cfg.host = host;
+        }
+        if let Ok(web_dir) = std::env::var("WEB_DIR") {
+            cfg.web_dir = PathBuf::from(web_dir);
+        } else if !cfg.web_dir.exists() {
+            if Path::new("./frontend/out").exists() {
+                cfg.web_dir = PathBuf::from("./frontend/out");
+            } else if Path::new("./web").exists() {
+                cfg.web_dir = PathBuf::from("./web");
+            }
+        }
+        if let Ok(data_dir) = std::env::var("DATA_DIR") {
+            cfg.data_dir = PathBuf::from(data_dir);
+        }
+        if let Ok(music_dir) = std::env::var("MUSIC_DIR") {
+            cfg.download_dir = PathBuf::from(music_dir);
+        }
 
-        let default_cfg = AppConfig::default();
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(&default_cfg) {
-            let _ = std::fs::write(p, json);
-        }
-        default_cfg
+        cfg
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), std::io::Error> {

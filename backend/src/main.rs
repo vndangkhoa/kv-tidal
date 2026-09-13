@@ -98,6 +98,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 5. Build Shared Application State
     let app_state = AppState::new(config, trending, library);
 
+    // Automatically trigger Soulseek network connection on startup if slskd is active
+    {
+        let soulseek = app_state.soulseek.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let status = soulseek.check_status().await;
+            if status.connected && !status.is_logged_in {
+                info!("Triggering automatic Soulseek network connection on startup...");
+                let _ = soulseek.trigger_connect().await;
+            }
+        });
+    }
+
     // 6. CORS Configuration
     let cors = CorsLayer::new()
         .allow_origin(Any)

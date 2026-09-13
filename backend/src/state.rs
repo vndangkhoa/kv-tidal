@@ -49,6 +49,7 @@ pub struct AppState {
     pub active_output: Arc<RwLock<ActiveOutputConfig>>,
     pub download_queue: crate::api::download::SharedDownloadQueue,
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
+    pub download_tokens: Arc<RwLock<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>>,
 }
 
 impl AppState {
@@ -78,6 +79,7 @@ impl AppState {
             active_output: Arc::new(RwLock::new(ActiveOutputConfig::default())),
             download_queue: crate::api::download::new_download_queue(),
             download_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
+            download_tokens: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 }

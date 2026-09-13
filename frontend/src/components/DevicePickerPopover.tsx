@@ -306,125 +306,136 @@ export function DevicePickerPopover({ className = "" }: DevicePickerPopoverProps
         />
       </button>
 
-      {/* Floating Modern Glassmorphism Popover */}
+      {/* Floating Modern Glassmorphism Popover (Responsive Card on Mobile) */}
       {isOpen && (
-        <div
-          ref={popoverRef}
-          className="absolute bottom-full mb-3 right-0 w-[340px] sm:w-[380px] bg-[#141414] backdrop-blur-2xl border border-white/15 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.85)] p-4 select-none z-50 animate-in fade-in slide-in-from-bottom-2 duration-150 space-y-3.5"
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between pb-2 border-b border-white/10">
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-textPrimary">
-                Audio Output Target
-              </span>
-              <span
-                className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider border ${
-                  isBitPerfectActive
-                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-                    : "bg-cyan-500/15 text-cyan-400 border-cyan-500/30"
-                }`}
-              >
-                {isBitPerfectActive ? "BIT-PERFECT DIRECT" : "WEB AUDIO"}
-              </span>
-            </div>
+        <>
+          {/* Mobile Dimmed Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 sm:hidden animate-in fade-in duration-150"
+            onClick={() => {
+              setIsOpen(false);
+              setEditingDeviceId(null);
+            }}
+          />
 
-            <div className="flex items-center space-x-1">
-              <button
-                onClick={handleRefresh}
-                title="Scan for connected audio devices"
-                className="p-1 rounded-lg hover:bg-card text-textSecondary hover:text-white transition-colors"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-primary" : ""}`} />
-              </button>
-              <button
-                onClick={() => setIsOpen(false)}
-                className="p-1 rounded-lg hover:bg-card text-textSecondary hover:text-white transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Device Lists with Smooth Scrolling */}
-          <div className="space-y-3 max-h-[380px] overflow-y-auto pr-0.5 custom-scrollbar">
-            {/* Section 1: This Device (Web Browser) */}
-            <div className="space-y-1.5">
-              <div className="flex items-center space-x-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary/80 px-1">
-                <Laptop className="w-3 h-3 text-cyan-400" />
-                <span>This Device</span>
+          <div
+            ref={popoverRef}
+            className="fixed inset-x-3 bottom-6 z-50 sm:absolute sm:inset-x-auto sm:right-0 sm:bottom-full sm:mb-3 w-auto sm:w-[380px] max-w-[calc(100vw-24px)] bg-[#141414] backdrop-blur-2xl border border-white/15 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.85)] p-4 select-none animate-in fade-in slide-in-from-bottom-2 duration-150 space-y-3.5 max-h-[85vh] flex flex-col"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between pb-2 border-b border-white/10 shrink-0">
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-textPrimary">
+                  Audio Output Target
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider border ${
+                    isBitPerfectActive
+                      ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                      : "bg-cyan-500/15 text-cyan-400 border-cyan-500/30"
+                  }`}
+                >
+                  {isBitPerfectActive ? "BIT-PERFECT DIRECT" : "WEB AUDIO"}
+                </span>
               </div>
+
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={handleRefresh}
+                  title="Scan for connected audio devices"
+                  className="p-1 rounded-lg hover:bg-card text-textSecondary hover:text-white transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-primary" : ""}`} />
+                </button>
+                <button
+                  onClick={() => setIsOpen(false)}
+                  className="p-1 rounded-lg hover:bg-card text-textSecondary hover:text-white transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Device Lists with Smooth Scrolling */}
+            <div className="space-y-3 max-h-[380px] overflow-y-auto pr-0.5 custom-scrollbar flex-1 min-h-0">
+              {/* Section 1: This Device (Web Browser) */}
               <div className="space-y-1.5">
-                {browserDevices.map(renderDeviceRow)}
-              </div>
-            </div>
-
-            {/* Section 2: Audiophile Hardware (Bit-Perfect ALSA) */}
-            {bitPerfectDevices.length > 0 && (
-              <div className="space-y-1.5 pt-1">
-                <div className="flex items-center justify-between text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary/80 px-1">
-                  <span className="flex items-center space-x-1.5">
-                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                    <span>Audiophile Direct Hardware</span>
-                  </span>
-                  <span className="text-[9px] text-emerald-400/80">Kernel ALSA Direct</span>
+                <div className="flex items-center space-x-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary/80 px-1">
+                  <Laptop className="w-3 h-3 text-cyan-400" />
+                  <span>This Device</span>
                 </div>
                 <div className="space-y-1.5">
-                  {bitPerfectDevices.map(renderDeviceRow)}
+                  {browserDevices.map(renderDeviceRow)}
                 </div>
               </div>
-            )}
 
-            {/* Section 3: Display & HDMI Audio (Collapsible) */}
-            {hdmiDevices.length > 0 && (
-              <div className="space-y-1.5 pt-1">
-                <button
-                  onClick={() => setShowHdmiGroup(!showHdmiGroup)}
-                  className="w-full flex items-center justify-between text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary/80 px-1 py-1 hover:text-white transition-colors cursor-pointer"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Tv className="w-3 h-3 text-amber-400" />
-                    <span>Display & HDMI Audio ({hdmiDevices.length} outputs)</span>
-                  </span>
-                  {showHdmiGroup ? (
-                    <ChevronUp className="w-3 h-3" />
-                  ) : (
-                    <ChevronDown className="w-3 h-3" />
-                  )}
-                </button>
-
-                {showHdmiGroup && (
-                  <div className="space-y-1.5 pl-1 animate-in fade-in duration-150">
-                    {hdmiDevices.map(renderDeviceRow)}
+              {/* Section 2: Audiophile Hardware (Bit-Perfect ALSA) */}
+              {bitPerfectDevices.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary/80 px-1">
+                    <span className="flex items-center space-x-1.5">
+                      <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                      <span>Audiophile Direct Hardware</span>
+                    </span>
+                    <span className="text-[9px] text-emerald-400/80">Kernel ALSA Direct</span>
                   </div>
-                )}
-              </div>
-            )}
-          </div>
+                  <div className="space-y-1.5">
+                    {bitPerfectDevices.map(renderDeviceRow)}
+                  </div>
+                </div>
+              )}
 
-          {/* Popover Footer Shortcuts */}
-          <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[11px] font-mono text-textSecondary">
-            <button
-              onClick={() => {
-                setIsOpen(false);
-                setIsSignalPathOpen(true);
-              }}
-              className="flex items-center space-x-1 hover:text-primary transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-3 h-3 text-primary" />
-              <span>Signal Path</span>
-            </button>
+              {/* Section 3: Display & HDMI Audio (Collapsible) */}
+              {hdmiDevices.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <button
+                    onClick={() => setShowHdmiGroup(!showHdmiGroup)}
+                    className="w-full flex items-center justify-between text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary/80 px-1 py-1 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center space-x-1.5">
+                      <Tv className="w-3 h-3 text-amber-400" />
+                      <span>Display & HDMI Audio ({hdmiDevices.length} outputs)</span>
+                    </span>
+                    {showHdmiGroup ? (
+                      <ChevronUp className="w-3 h-3" />
+                    ) : (
+                      <ChevronDown className="w-3 h-3" />
+                    )}
+                  </button>
 
-            <Link
-              href="/settings"
-              onClick={() => setIsOpen(false)}
-              className="flex items-center space-x-1 hover:text-accent transition-colors"
-            >
-              <Sliders className="w-3 h-3 text-accent" />
-              <span>Audio Transport Settings</span>
-            </Link>
+                  {showHdmiGroup && (
+                    <div className="space-y-1.5 pl-1 animate-in fade-in duration-150">
+                      {hdmiDevices.map(renderDeviceRow)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Popover Footer Shortcuts */}
+            <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[11px] font-mono text-textSecondary shrink-0">
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  setIsSignalPathOpen(true);
+                }}
+                className="flex items-center space-x-1 hover:text-primary transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-3 h-3 text-primary" />
+                <span>Signal Path</span>
+              </button>
+
+              <Link
+                href="/settings"
+                onClick={() => setIsOpen(false)}
+                className="flex items-center space-x-1 hover:text-accent transition-colors"
+              >
+                <Sliders className="w-3 h-3 text-accent" />
+                <span>Audio Transport Settings</span>
+              </Link>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

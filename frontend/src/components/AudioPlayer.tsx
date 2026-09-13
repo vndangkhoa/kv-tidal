@@ -75,7 +75,12 @@ export function AudioPlayer() {
   const [isArtworkModalOpen, setIsArtworkModalOpen] = useState(false);
   const [isStudioToolsOpen, setIsStudioToolsOpen] = useState(false);
   const [timeMode, setTimeMode] = useState<"elapsed" | "remaining" | "frames">("elapsed");
+  const [coverError, setCoverError] = useState(false);
   const studioToolsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setCoverError(false);
+  }, [currentTrack?.id]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -137,6 +142,7 @@ export function AudioPlayer() {
       title: currentTrack.title,
       artist: currentTrack.artist,
       album: currentTrack.album,
+      duration: currentTrack.duration,
       stream_url: currentTrack.streamUrl,
       cover_url: currentTrack.coverUrl,
       track_id: currentTrack.id,
@@ -170,6 +176,7 @@ export function AudioPlayer() {
           title: currentTrack.title,
           artist: currentTrack.artist,
           album: currentTrack.album,
+          duration: currentTrack.duration,
           stream_url: currentTrack.streamUrl,
           cover_url: currentTrack.coverUrl,
           track_id: currentTrack.id,
@@ -217,10 +224,11 @@ export function AudioPlayer() {
             title="Click to inspect ultra-HD artwork & album details"
             className="w-14 h-14 rounded-tidal bg-card flex-shrink-0 overflow-hidden border border-border/80 flex items-center justify-center shadow-md cursor-pointer group relative hover:border-primary/60 transition-all hover:shadow-[0_0_15px_rgba(0,255,255,0.25)]"
           >
-            {currentTrack.coverUrl ? (
+            {currentTrack.coverUrl && !coverError ? (
               <img
                 src={currentTrack.coverUrl}
                 alt={currentTrack.title}
+                onError={() => setCoverError(true)}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
               />
             ) : (
@@ -627,10 +635,11 @@ export function AudioPlayer() {
         {/* Artwork & Info */}
         <div className="flex items-center space-x-3 min-w-0 flex-1">
           <div className="w-10 h-10 rounded-tidal bg-card flex-shrink-0 overflow-hidden border border-border/60 flex items-center justify-center">
-            {currentTrack.coverUrl ? (
+            {currentTrack.coverUrl && !coverError ? (
               <img
                 src={currentTrack.coverUrl}
                 alt={currentTrack.title}
+                onError={() => setCoverError(true)}
                 className="w-full h-full object-cover"
               />
             ) : (
@@ -756,10 +765,11 @@ export function AudioPlayer() {
             title="Tap to zoom / inspect ultra-HD artwork"
             className="w-[76vw] h-[76vw] max-w-[340px] max-h-[340px] rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.9)] border border-border flex items-center justify-center bg-card cursor-pointer group relative"
           >
-            {currentTrack.coverUrl ? (
+            {currentTrack.coverUrl && !coverError ? (
               <img
                 src={currentTrack.coverUrl}
                 alt={currentTrack.title}
+                onError={() => setCoverError(true)}
                 className="w-full h-full object-cover"
               />
             ) : (
@@ -891,10 +901,10 @@ export function AudioPlayer() {
                 setIsFullscreenPlayerOpen(false);
                 setIsSignalPathOpen(true);
               }}
-              className="px-2.5 py-1 rounded text-[11px] font-mono font-bold border border-badgeMax/40 bg-badgeMaxBg text-badgeMax flex items-center space-x-1.5 cursor-pointer"
+              className="px-2.5 py-1 rounded text-[11px] font-mono font-bold border border-badgeMax/40 bg-badgeMaxBg text-badgeMax flex items-center space-x-1.5 cursor-pointer min-w-0 max-w-[190px] sm:max-w-none"
             >
-              <Sparkles className="w-3 h-3 text-badgeMax" />
-              <span>
+              <Sparkles className="w-3 h-3 text-badgeMax shrink-0" />
+              <span className="truncate">
                 {isHiRes ? "MAX" : "HIGH"} • {bitDepth}B/{sampleRateKhz}k {formatName}
               </span>
             </button>
