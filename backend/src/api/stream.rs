@@ -93,63 +93,61 @@ async fn handle_stream(
         .as_deref()
         .map(|f| f.eq_ignore_ascii_case("opus"))
         .unwrap_or(false);
-    let is_explicit_local = query.path.is_some()
-        || query.id.as_deref().map(|id| id.starts_with('/')).unwrap_or(false);
 
-    if !force_opus || is_explicit_local {
-        // 1. Check if track already exists in local NAS library (by path, ID, or artist & title)
-        let mut local_track = {
-            let lib = state.library.read().await;
-            if let Some(path_str) = &query.path {
-                let p = PathBuf::from(path_str);
-                lib.tracks.values().find(|t| t.file_path == p).cloned().or_else(|| {
-                    if p.exists() && p.is_file() {
-                        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                        let is_dsd = ext == "dsf" || ext == "dff";
-                        let id = format!("{:x}", md5::compute(p.to_string_lossy().as_bytes()));
-                        Some(crate::storage::scanner::LibraryTrack {
-                            id,
-                            title: query.title.clone().unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
-                            artist: query.artist.clone().unwrap_or_else(|| "Synology NAS Vault".to_string()),
-                            album: "Lossless Storage".to_string(),
-                            duration: 0,
-                            track_number: 1,
-                            file_path: p,
-                            format: ext,
-                            bit_depth: if is_dsd { Some(1) } else { Some(24) },
-                            sample_rate: if is_dsd { Some(2822400) } else { Some(96000) },
-                            bitrate: if is_dsd { Some(5644) } else { Some(2400) },
-                            channels: Some(2),
-                            year: None,
-                            dr_score: Some(13),
-                            hires: true,
-                            is_dsd,
-                        })
-                    } else {
-                        None
-                    }
-                })
-            } else if let Some(id) = &query.id {
-                if id.starts_with('/') {
-                    let p = PathBuf::from(id);
-                    lib.tracks.values().find(|t| t.file_path == p).cloned()
-                } else if let Some(t) = lib.tracks.get(id) {
-                    Some(t.clone())
-                } else if !artist.is_empty() && !title.is_empty() {
-                    lib.tracks.values().find(|t| {
-                        t.artist.eq_ignore_ascii_case(artist) && t.title.eq_ignore_ascii_case(title)
-                    }).cloned()
+    // 1. Check if track already exists in local NAS library (by path, exact ID, or artist & title)
+    let mut local_track = {
+        let lib = state.library.read().await;
+        if let Some(path_str) = &query.path {
+            let p = PathBuf::from(path_str);
+            lib.tracks.values().find(|t| t.file_path == p).cloned().or_else(|| {
+                if p.exists() && p.is_file() {
+                    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    let is_dsd = ext == "dsf" || ext == "dff";
+                    let id = format!("{:x}", md5::compute(p.to_string_lossy().as_bytes()));
+                    Some(crate::storage::scanner::LibraryTrack {
+                        id,
+                        title: query.title.clone().unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
+                        artist: query.artist.clone().unwrap_or_else(|| "Synology NAS Vault".to_string()),
+                        album: "Lossless Storage".to_string(),
+                        duration: 0,
+                        track_number: 1,
+                        file_path: p,
+                        format: ext,
+                        bit_depth: if is_dsd { Some(1) } else { Some(24) },
+                        sample_rate: if is_dsd { Some(2822400) } else { Some(96000) },
+                        bitrate: if is_dsd { Some(5644) } else { Some(2400) },
+                        channels: Some(2),
+                        year: None,
+                        dr_score: Some(13),
+                        hires: true,
+                        is_dsd,
+                    })
                 } else {
                     None
                 }
-            } else if !artist.is_empty() && !title.is_empty() {
+            })
+        } else if let Some(id) = &query.id {
+            if id.starts_with('/') {
+                let p = PathBuf::from(id);
+                lib.tracks.values().find(|t| t.file_path == p).cloned()
+            } else if let Some(t) = lib.tracks.get(id) {
+                // Exact local track match by MD5 ID: ALWAYS serve!
+                Some(t.clone())
+            } else if !force_opus && !artist.is_empty() && !title.is_empty() {
                 lib.tracks.values().find(|t| {
                     t.artist.eq_ignore_ascii_case(artist) && t.title.eq_ignore_ascii_case(title)
                 }).cloned()
             } else {
                 None
             }
-        };
+        } else if !force_opus && !artist.is_empty() && !title.is_empty() {
+            lib.tracks.values().find(|t| {
+                t.artist.eq_ignore_ascii_case(artist) && t.title.eq_ignore_ascii_case(title)
+            }).cloned()
+        } else {
+            None
+        }
+    };
 
         // Quick fallback check on disk in download/library directories if not yet indexed in memory
         if local_track.is_none() && !title.is_empty() {
@@ -387,24 +385,25 @@ async fn handle_stream(
         }
     }
 
-    // Direct Tidal Stream Resolution if track_id is provided
-    if let Some(id) = &query.id {
-        let clean_id = id.trim_start_matches("tidal-");
-        if !clean_id.is_empty() && clean_id.chars().all(|c| c.is_ascii_digit()) {
-            if let Ok(tidal_stream) = state.tidal.resolve_stream_url(clean_id, None).await {
-                return proxy_stream_with_meta(
-                    &tidal_stream,
-                    req,
-                    "tidal-direct-hifi",
-                    "FLAC (Tidal Master)",
-                    Some(24),
-                    Some(96000),
-                    Some(2500),
-                    true,
-                ).await;
+    // Direct Tidal Stream Resolution if track_id is provided and !force_opus
+    if !force_opus {
+        if let Some(id) = &query.id {
+            let clean_id = id.trim_start_matches("tidal-");
+            if !clean_id.is_empty() && clean_id.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(tidal_stream) = state.tidal.resolve_stream_url(clean_id, None).await {
+                    return proxy_stream_with_meta(
+                        &tidal_stream,
+                        req,
+                        "tidal-direct-hifi",
+                        "FLAC (Tidal Master)",
+                        Some(24),
+                        Some(96000),
+                        Some(2500),
+                        true,
+                    ).await;
+                }
             }
         }
-    }
     }
 
     // 2. Resolve 100% full-length song stream (Invidious / yt-dlp)
@@ -420,6 +419,25 @@ async fn handle_stream(
                 Some(160),
                 false,
             ).await;
+        }
+    }
+
+    // Fallback to Tidal stream if force_opus was set but web stream resolution was unavailable
+    if let Some(id) = &query.id {
+        let clean_id = id.trim_start_matches("tidal-");
+        if !clean_id.is_empty() && clean_id.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(tidal_stream) = state.tidal.resolve_stream_url(clean_id, None).await {
+                return proxy_stream_with_meta(
+                    &tidal_stream,
+                    req,
+                    "tidal-direct-hifi",
+                    "FLAC (Tidal Master)",
+                    Some(24),
+                    Some(96000),
+                    Some(2500),
+                    true,
+                ).await;
+            }
         }
     }
 

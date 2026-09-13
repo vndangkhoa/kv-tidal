@@ -757,9 +757,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Play in browser
       if (track.streamUrl) {
         let finalStreamUrl = track.streamUrl;
+        const isLocalTrack = track.source === "local" || track.id.startsWith("/");
+        if (isLocalTrack) {
+          setStreamQualityState("flac");
+        }
+
         try {
           const urlObj = new URL(finalStreamUrl, window.location.origin);
-          if (urlObj.pathname.includes("/api/stream")) {
+          if (urlObj.pathname.includes("/api/stream") && !isLocalTrack) {
             urlObj.searchParams.set("format", streamQuality);
             finalStreamUrl = urlObj.pathname + urlObj.search;
           }

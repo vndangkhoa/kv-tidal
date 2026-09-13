@@ -118,10 +118,14 @@ async fn test_download_queue_lifecycle() {
             progress_percent: 0,
             downloaded_bytes: 0,
             total_bytes: Some(35_000_000),
+            duration: Some(186),
+            slskd_username: None,
+            slskd_id: None,
             speed_kbps: None,
             eta_seconds: None,
             error: None,
             saved_path: None,
+            request_payload: None,
             created_at: now,
             updated_at: now,
         });
@@ -304,6 +308,55 @@ async fn test_find_downloaded_file_on_disk() {
 
     assert!(found.is_some());
     assert_eq!(found.unwrap(), target_file);
+}
+
+#[tokio::test]
+async fn test_stream_local_track_with_force_opus() {
+    let temp = tempfile::tempdir().unwrap();
+    let audio_file = temp.path().join("01 - Toughest.flac");
+    let fake_flac = vec![0u8; 2048];
+    std::fs::write(&audio_file, &fake_flac).unwrap();
+
+    let track_id = format!("{:x}", md5::compute(audio_file.to_string_lossy().as_bytes()));
+    let library = kv_tidal::storage::scanner::new_library_store();
+    {
+        let mut lib = library.write().await;
+        lib.tracks.insert(track_id.clone(), kv_tidal::storage::scanner::LibraryTrack {
+            id: track_id.clone(),
+            title: "Toughest".to_string(),
+            artist: "Ed Sheeran".to_string(),
+            album: "-".to_string(),
+            track_number: 1,
+            duration: 180,
+            year: Some(2023),
+            file_path: audio_file.clone(),
+            format: "flac".to_string(),
+            bit_depth: Some(24),
+            sample_rate: Some(48000),
+            bitrate: Some(1500),
+            channels: Some(2),
+            hires: true,
+            dr_score: Some(12),
+            is_dsd: false,
+        });
+    }
+
+    let config = std::sync::Arc::new(tokio::sync::RwLock::new(kv_tidal::config::AppConfig::default()));
+    let trending = kv_tidal::trending::new_trending_store();
+    let state = kv_tidal::state::AppState::new(config, trending, library);
+
+    let router = kv_tidal::api::stream::router().with_state(state);
+    use tower_service::Service;
+    let uri = format!("/?id={}&format=opus", track_id);
+    let req = axum::http::Request::builder()
+        .uri(&uri)
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let mut router = router;
+    let res = router.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
 }
 
 

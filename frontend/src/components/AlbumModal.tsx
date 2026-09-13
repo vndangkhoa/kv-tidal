@@ -111,7 +111,7 @@ export function AlbumModal({ isOpen, onClose, album }: AlbumModalProps) {
         album: t.collectionName || album.title,
         coverUrl: album.coverUrl,
         streamUrl: isLocal && t.streamId
-          ? `/api/stream?id=${encodeURIComponent(t.streamId)}`
+          ? `/api/stream?id=${encodeURIComponent(t.streamId)}&artist=${encodeURIComponent(t.artistName)}&title=${encodeURIComponent(t.trackName)}`
           : `/api/stream?artist=${encodeURIComponent(t.artistName)}&title=${encodeURIComponent(t.trackName)}`,
         duration: t.trackTimeMillis ? Math.round(t.trackTimeMillis / 1000) : 210,
         bitDepth: t.bitDepth || 24,
@@ -138,7 +138,7 @@ export function AlbumModal({ isOpen, onClose, album }: AlbumModalProps) {
       album: t.collectionName || album.title,
       coverUrl: album.coverUrl,
       streamUrl: isLocal && t.streamId
-        ? `/api/stream?id=${encodeURIComponent(t.streamId)}`
+        ? `/api/stream?id=${encodeURIComponent(t.streamId)}&artist=${encodeURIComponent(t.artistName)}&title=${encodeURIComponent(t.trackName)}`
         : `/api/stream?artist=${encodeURIComponent(t.artistName)}&title=${encodeURIComponent(t.trackName)}`,
       duration: t.trackTimeMillis ? Math.round(t.trackTimeMillis / 1000) : 210,
       bitDepth: t.bitDepth || 24,

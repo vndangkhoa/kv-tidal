@@ -235,7 +235,7 @@ function LibraryContent() {
       artist: t.artist,
       album: t.album,
       coverUrl: `/rest/getCoverArt.view?id=album-${album.id}`,
-      streamUrl: `/api/stream?id=${encodeURIComponent(t.id)}`,
+      streamUrl: `/api/stream?id=${encodeURIComponent(t.id)}&artist=${encodeURIComponent(t.artist || "")}&title=${encodeURIComponent(t.title || "")}`,
       duration: t.duration,
       bitDepth: t.bit_depth || 24,
       sampleRate: t.sample_rate || 96000,

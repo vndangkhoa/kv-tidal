@@ -4,6 +4,14 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-26] - 2026-09-13
+
+### Added & Improved
+- **Guaranteed Bit-Perfect FLAC for Local Tracks**: Player engine now strictly preserves lossless bit-perfect FLAC streaming for all local NAS library tracks (`track.source === "local"` or local filesystem paths), preventing unintended transcoding to Opus.
+- **Rich Stream URL Metadata in Album Modal & Library**: Augmented `/api/stream` invocations with explicit `artist` and `title` query parameters from `AlbumModal` and `/library` views, ensuring immediate fallback stream resolution and accurate track matching.
+- **Stream Resolution Fallback Hierarchy**: Implemented resilient multi-tier stream resolution in `api/stream.rs` that respects `!force_opus` for direct Tidal HiFi Master FLAC playback, while seamlessly falling back to Tidal CDN if web-based Opus resolvers are unavailable.
+- **Automated Stream Quality Tests**: Added integration tests validating format selection, fallback hierarchy, and local track streaming under forced opus flags.
+
 ## [1.0.0-25] - 2026-09-13
 
 ### Fixed & Improved
