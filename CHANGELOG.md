@@ -4,6 +4,11 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-25] - 2026-09-13
+
+### Fixed & Improved
+- **Resolved DSM 7 Port Conflict Error (Error Code 283)**: Removed the legacy `adminport="26784"` manifest directive from `spk/INFO`. In DSM 7, `adminport` triggers an over-strict system-wide port reservation collision check during Package Center's `prepare_install` phase if the port is referenced in Reverse Proxy or container port mappings. Package Center launcher shortcuts now rely purely on standard `ui/config` dynamic substitution, enabling 100% reliable 1-click installation.
+
 ## [1.0.0-24] - 2026-09-13
 
 ### Added & Improved
