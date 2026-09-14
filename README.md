@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://pkg.khoavo.myds.me/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--27-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
+  <a href="https://syno.vndns.net/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--27-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
   <a href="https://hub.docker.com/r/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Docker_Hub-vndangkhoa%2Fkv--tidal-2496ED?style=flat-square&logo=docker" alt="Docker Hub" /></a>
   <a href="https://ghcr.io/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/GHCR.io-vndangkhoa%2Fkv--tidal-181717?style=flat-square&logo=github" alt="GHCR" /></a>
   <a href="https://git.khoavo.myds.me/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Forgejo-git.khoavo.myds.me-FB542B?style=flat-square&logo=git" alt="Forgejo" /></a>
@@ -103,7 +103,7 @@ Running as a native DSM package consumes **less than 25MB RAM** with near-zero C
 1. In Synology DSM, open **Package Center** → **Settings** → **Package Sources**.
 2. Click **Add** and enter:
    - **Name**: `KV Apps`
-   - **Location**: `https://pkg.khoavo.myds.me`
+   - **Location**: `https://syno.vndns.net`
 3. Click **Community** tab, search for **KV-Tidal**, and click **Install**.
 
 #### Method B: Manual SPK Install
