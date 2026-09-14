@@ -1,35 +1,49 @@
-# KV-TIDAL 🎵
+# 🎵 KV-Tidal — Ultimate Lossless Audiophile Vault & Streamer
+
+<div align="center">
 
 <p align="center">
-  <img src="spk/PACKAGE_ICON_256.PNG" width="128" height="128" alt="KV-Tidal Icon" />
+  <img src="spk/PACKAGE_ICON_256.PNG" width="128" height="128" alt="KV-Tidal Icon" style="border-radius: 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);" />
 </p>
 
-<p align="center">
-  <strong>Ultimate High-Resolution Music Streaming & Audiophile Vault for Synology NAS</strong>
-</p>
+**Bit-perfect 24-bit/192kHz studio FLAC & DSD streaming, native bundled Soulseek P2P lossless engine, and OpenSubsonic server for Synology NAS.**
 
-<p align="center">
-  <a href="https://syno.vndns.net/package/kvtidal"><img src="https://img.shields.io/badge/Synology_SPK-v1.0.0--27-blue?style=flat-square&logo=synology" alt="Synology SPK" /></a>
-  <a href="https://hub.docker.com/r/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Docker_Hub-vndangkhoa%2Fkv--tidal-2496ED?style=flat-square&logo=docker" alt="Docker Hub" /></a>
-  <a href="https://ghcr.io/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/GHCR.io-vndangkhoa%2Fkv--tidal-181717?style=flat-square&logo=github" alt="GHCR" /></a>
-  <a href="https://git.khoavo.myds.me/vndangkhoa/kv-tidal"><img src="https://img.shields.io/badge/Forgejo-git.khoavo.myds.me-FB542B?style=flat-square&logo=git" alt="Forgejo" /></a>
-  <img src="https://img.shields.io/badge/Engine-Rust_1.85_Async-DEA584?style=flat-square&logo=rust" alt="Rust" />
-  <img src="https://img.shields.io/badge/Frontend-Next.js_15_%2B_React_19-000000?style=flat-square&logo=next.js" alt="Next.js" />
-  <img src="https://img.shields.io/badge/Subsonic-OpenSubsonic_v1.16.1-FF5500?style=flat-square" alt="OpenSubsonic" />
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
-</p>
+[![GitHub Stars](https://img.shields.io/github/stars/vndangkhoa/kv-tidal?style=flat-square&logo=github&color=gold)](https://github.com/vndangkhoa/kv-tidal/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/vndangkhoa/kv-tidal?style=flat-square&logo=github&color=blue)](https://github.com/vndangkhoa/kv-tidal/network/members)
+[![Synology SPK](https://img.shields.io/badge/Synology_SPK-v1.0.0--27-blue?style=flat-square&logo=synology)](https://syno.vndns.net/package/kvtidal)
+[![Docker Hub](https://img.shields.io/badge/Docker_Hub-vndangkhoa%2Fkv--tidal-2496ED?style=flat-square&logo=docker)](https://hub.docker.com/r/vndangkhoa/kv-tidal)
+[![Engine: Rust 1.85](https://img.shields.io/badge/Engine-Rust_1.85_Axum-DEA584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Frontend: Next.js 15](https://img.shields.io/badge/Frontend-Next.js_15_%2B_React_19-000000?style=flat-square&logo=next.js)](https://nextjs.org/)
+[![OpenSubsonic](https://img.shields.io/badge/API-OpenSubsonic_v1.16.1-FF5500?style=flat-square)](https://opensubsonic.netlify.app/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+
+[Why KV-Tidal](#-why-kv-tidal) • [Features](#-key-features) • [Comparison](#-competitive-matrix) • [Installation](#-installation--deployment) • [Architecture](#-data-flow-architecture) • [OpenSubsonic](#-connecting-subsonic-mobile--desktop-apps) • [License](#-license)
+
+</div>
 
 ---
 
-## 📖 Overview
+## ⚡ Why KV-Tidal?
 
-**KV-Tidal** is a self-hosted, ultra-low-latency audiophile music streaming platform and downloader engineered specifically for **Synology NAS (DSM 7.0+)** and **Docker Container Manager**. 
+Most homelab music servers (Navidrome, Jellyfin, Audio Station) only serve files you already have on disk. If a track is missing, you must leave the app, find and download it manually, tag it, and rescan. Furthermore, web players often convert or downsample audio silently.
 
-Built with a high-concurrency **Rust Axum** backend and a responsive **Next.js 15 / React 19** dark-themed PWA frontend, KV-Tidal bridges your local lossless audio library with real-time online streaming, live trending charts, and an **OpenSubsonic** server compatible with all audiophile mobile and desktop players.
+**KV-Tidal** changes the game:
+1. **Bit-Perfect Lossless Core**: Serves authentic studio FLAC up to 24-bit/192kHz and real-time DSD integer decimation to 24-bit/88.2kHz.
+2. **Instant Search + Auto-Lossless Fetch**: Plays online tracks in ~10ms via Opus. Tap `[FLAC]` to trigger the built-in Soulseek P2P swarm, saving the verified 24-bit Studio FLAC directly into your `/volume2/music` folder and hot-swapping playback mid-song with 0ms glitch.
+3. **Subsonic Universal Bridge**: Full OpenSubsonic server compatible with Symfonium, Feishin, and Tempo.
 
-> [!IMPORTANT]
-> **🎧 True Bit-Perfect Real FLAC High-Res Streaming Guarantee**:
-> Unlike standard web players that upscale or re-encode lossy YouTube/AAC streams, KV-Tidal streams **100% genuine studio lossless FLAC** (16-bit / 44.1kHz up to 24-bit / 192kHz Studio Masters) and DSD (2.82MHz) directly from your NAS storage via byte-range `audio/flac` streams with zero conversion loss. Online searches play lightweight Opus for instantaneous 0ms playback, and 1-tap on `FLAC` automatically downloads the real studio FLAC master via Soulseek P2P, seamlessly hot-swapping playback mid-song without interruption!
+### 📊 Competitive Matrix
+
+| Feature | 🎵 KV-Tidal | 📻 Navidrome | 🎧 Plexamp | 📼 Audio Station (DSM) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Backend Core** | **Rust Axum (<25MB RAM)** | Go (Lightweight) | Proprietary C++ | C / PHP (Legacy) |
+| **Bit-Perfect 24/192 & DSD** | ✅ **Direct Range + DSD Decimate**| ⚠️ Transcoded or direct | ✅ Bit-perfect | ❌ 16-bit / downsampled |
+| **Lossless P2P Retrieval** | ✅ **Native Bundled Soulseek (`slskd`)**| ❌ None | ❌ None | ❌ None |
+| **Smart FLAC Auto-Download**| ✅ **1-Tap Auto-Download & Hot-Swap** | ❌ None | ❌ None | ❌ None |
+| **OpenSubsonic Protocol** | ✅ **OpenSubsonic v1.16.1** | ✅ Subsonic API | ❌ Plex Proprietary | ❌ DS Audio Only |
+| **Synology SPK DSM 7.x** | ✅ **Native Package (<25MB RAM)** | ❌ Docker only | ❌ Docker only | ✅ Native Package |
+| **Hardware USB DAC Direct**| ✅ **ALSA direct bitstream (/proc/asound)**| ❌ None | ⚠️ Headless only | ❌ Deprecated |
+| **UI Experience** | 💎 **Next.js 15 + Miller Columns + VU** | 📁 React Web | 📱 Native App | 🐢 Old ExtJS |
 
 ---
 
@@ -339,6 +353,13 @@ kv-tidal/
 ```
 
 ---
+
+
+---
+
+## 🌟 Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=vndangkhoa/kv-tidal&type=Date)](https://star-history.com/#vndangkhoa/kv-tidal&Date)
 
 ## 📄 License
 
