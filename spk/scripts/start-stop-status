@@ -11,11 +11,14 @@ start_daemon() {
         return 0
     fi
     mkdir -p "$VAR_DIR" "$VAR_DIR/tmp"
+    chmod 777 "$VAR_DIR/tmp" 2>/dev/null || true
+    chown -R sc-kvtidal:synocache "$VAR_DIR/tmp" 2>/dev/null || true
     export DATA_DIR="${VAR_DIR}"
     export CONFIG_PATH="/var/packages/${PACKAGE}/etc/config.json"
     export WEB_DIR="${INSTALL_DIR}/web"
     export RUST_LOG="info"
     export TMPDIR="${VAR_DIR}/tmp"
+    export YT_DLP_PATH="${INSTALL_DIR}/bin/yt-dlp"
     export PATH="${INSTALL_DIR}/bin:/usr/local/bin:/usr/syno/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/packages/ffmpeg7/target/bin:/var/packages/ffmpeg6/target/bin:/var/packages/ffmpeg/target/bin:/opt/bin:$PATH"
 
     # Synchronize DSM UI launcher port and INFO adminport with actual configured port

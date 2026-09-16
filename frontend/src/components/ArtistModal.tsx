@@ -96,9 +96,7 @@ export function ArtistModal({
     coverUrl: t.cover_url,
     streamUrl: `/api/stream?artist=${encodeURIComponent(t.artist)}&title=${encodeURIComponent(
       t.title
-    )}${t.stream_id ? `&id=${encodeURIComponent(t.stream_id)}` : ""}${
-      t.preview_url ? `&url=${encodeURIComponent(t.preview_url)}` : ""
-    }`,
+    )}${t.stream_id ? `&id=${encodeURIComponent(t.stream_id)}` : ""}`,
     duration: t.duration,
     bitDepth: t.bit_depth || 24,
     sampleRate: t.sample_rate || 96000,

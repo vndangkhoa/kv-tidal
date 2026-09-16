@@ -154,9 +154,7 @@ export default function HomePage() {
     artist: track.artist,
     album: track.album,
     coverUrl: track.cover_url,
-    streamUrl: `/api/stream?artist=${encodeURIComponent(track.artist)}&title=${encodeURIComponent(track.title)}${
-      track.preview_url ? `&url=${encodeURIComponent(track.preview_url)}` : ""
-    }`,
+    streamUrl: `/api/stream?artist=${encodeURIComponent(track.artist)}&title=${encodeURIComponent(track.title)}`,
     bitDepth: 24,
     sampleRate: 96000,
     bitrate: 2980,
@@ -236,9 +234,7 @@ export default function HomePage() {
             coverUrl: t.cover_url,
             streamUrl: `/api/stream?artist=${encodeURIComponent(t.artist)}&title=${encodeURIComponent(
               t.title
-            )}${t.stream_id ? `&id=${encodeURIComponent(t.stream_id)}` : ""}${
-              t.preview_url ? `&url=${encodeURIComponent(t.preview_url)}` : ""
-            }`,
+            )}${t.stream_id ? `&id=${encodeURIComponent(t.stream_id)}` : ""}`,
             duration: t.duration,
             bitDepth: t.bit_depth || 24,
             sampleRate: t.sample_rate || 96000,
@@ -717,7 +713,7 @@ export default function HomePage() {
                   coverUrl: t.cover_url,
                   streamUrl: `/api/stream?artist=${encodeURIComponent(t.artist)}&title=${encodeURIComponent(
                     t.title
-                  )}${t.preview_url ? `&url=${encodeURIComponent(t.preview_url)}` : ""}`,
+                  )}`,
                   previewUrl: t.preview_url,
                   source: "tidal",
                   hires: true,
@@ -763,9 +759,7 @@ export default function HomePage() {
                         coverUrl: track.cover_url,
                         streamUrl: `/api/stream?artist=${encodeURIComponent(
                           track.artist
-                        )}&title=${encodeURIComponent(track.title)}${
-                          track.preview_url ? `&url=${encodeURIComponent(track.preview_url)}` : ""
-                        }`,
+                        )}&title=${encodeURIComponent(track.title)}`,
                         bitDepth: 24,
                         sampleRate: 96000,
                         bitrate: 2850,

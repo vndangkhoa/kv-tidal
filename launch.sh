@@ -287,7 +287,7 @@ do_start() {
   chmod +x "$BINARY" 2>/dev/null || true
 
   # Ensure data and music directories exist
-  mkdir -p "$ROOT_DIR/data"
+  mkdir -p "$ROOT_DIR/data" "$ROOT_DIR/data/tmp"
   mkdir -p "$ROOT_DIR/music"
 
   # Clean up stale PID file if present
@@ -300,6 +300,15 @@ do_start() {
   export DATA_DIR="$ROOT_DIR/data"
   export MUSIC_DIR="$ROOT_DIR/music"
   export CONFIG_PATH="$CONFIG_FILE"
+  export TMPDIR="$ROOT_DIR/data/tmp"
+
+  if [ -x "$ROOT_DIR/spk/bin/yt-dlp_linux" ]; then
+    export YT_DLP_PATH="$ROOT_DIR/spk/bin/yt-dlp_linux"
+  elif [ -x "$ROOT_DIR/spk/bin/yt-dlp" ]; then
+    export YT_DLP_PATH="$ROOT_DIR/spk/bin/yt-dlp"
+  elif command -v yt-dlp >/dev/null 2>&1; then
+    export YT_DLP_PATH="$(command -v yt-dlp)"
+  fi
 
   LAN_IP=$(get_lan_ip)
 

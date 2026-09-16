@@ -4,6 +4,15 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-28] - 2026-09-16
+
+### Fixed & Improved
+- **Eliminated 30-Second Audio Playback Cutoff**: Prevented Apple Music promotional preview clips from silently masquerading as full track streams when Tidal unauthenticated or Opus playback is requested. Added explicit `preview` query parameter separation.
+- **Resilient Multi-Path Stream Resolver**: Augmented `yt-dlp` discovery across native SPK installation directories, local user bins, and system PATH. Implemented dynamic detection of writable and executable temporary directories (`find_writable_tmp()`) to prevent PyInstaller extraction failures on Synology DSM.
+- **YouTube SABR/PO-Token Bypass & Search Optimization**: Added bot-resistant Android/mweb client emulation flags and query title sanitization, speeding up full song stream resolution to under 3 seconds.
+- **Synology DSM Permissions & Packaging**: Enforced world-writable permissions (`chmod 777`) on `$VAR_DIR/tmp` owned by `sc-kvtidal:synocache` in `start-stop-status` and `postinst`, allowing PyInstaller binaries to execute without permission errors. Bundled both `yt-dlp` and `yt-dlp_linux` into the SPK package.
+- **Frontend Stream URL Sanitization**: Removed preview URL parameter injection across all track listing and playback modal components.
+
 ## [1.0.0-27] - 2026-09-13
 
 ### Added & Improved

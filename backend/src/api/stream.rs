@@ -16,6 +16,7 @@ pub struct StreamRequest {
     pub url: Option<String>,
     pub path: Option<String>,
     pub format: Option<String>,
+    pub preview: Option<bool>,
 }
 
 fn find_ffmpeg() -> Option<PathBuf> {
@@ -452,24 +453,49 @@ async fn handle_stream(
         }
     }
 
-    // 3. Fallback to direct URL if provided
+    // 3. Explicit preview or non-preview direct URL fallback
     if let Some(direct_url) = &query.url {
         if !direct_url.is_empty() {
-            return proxy_stream_with_meta(
-                direct_url,
-                req,
-                "direct-url",
-                "Direct Stream",
-                Some(16),
-                Some(44100),
-                Some(320),
-                false,
-            ).await;
+            let is_apple_preview = direct_url.contains("itunes.apple.com")
+                || direct_url.contains("mzstatic.com")
+                || direct_url.contains("audio-ssl");
+
+            // Only serve Apple Music 30s preview if explicitly requested via preview=true
+            if is_apple_preview {
+                if query.preview == Some(true) {
+                    return proxy_stream_with_meta(
+                        direct_url,
+                        req,
+                        "apple-music-preview",
+                        "AAC 256kbps Preview",
+                        Some(16),
+                        Some(44100),
+                        Some(256),
+                        false,
+                    ).await;
+                } else {
+                    tracing::warn!(
+                        "Refusing to silently stream 30s preview clip for full-length request: '{} - {}'",
+                        artist, title
+                    );
+                }
+            } else {
+                return proxy_stream_with_meta(
+                    direct_url,
+                    req,
+                    "direct-url",
+                    "Direct Stream",
+                    Some(16),
+                    Some(44100),
+                    Some(320),
+                    false,
+                ).await;
+            }
         }
     }
 
-    // 4. Dynamic metadata fallback: resolve preview stream from Apple Music CDN
-    if !title.is_empty() {
+    // 4. If explicit preview requested and no direct URL, resolve Apple Music preview
+    if query.preview == Some(true) && !title.is_empty() {
         let search_term = if !artist.is_empty() {
             format!("{} {}", artist, title)
         } else {
@@ -477,7 +503,7 @@ async fn handle_stream(
         };
         if let Some(meta) = state.metadata.resolve_apple_music(&search_term).await {
             if let Some(preview_url) = meta.preview_url {
-                tracing::info!("Falling back to Apple Music stream for '{} - {}'", artist, title);
+                tracing::info!("Explicit preview stream served for '{} - {}'", artist, title);
                 return proxy_stream_with_meta(
                     &preview_url,
                     req,
@@ -492,7 +518,13 @@ async fn handle_stream(
         }
     }
 
-    StatusCode::NOT_FOUND.into_response()
+    let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();
+    let h = res.headers_mut();
+    h.insert(
+        header::HeaderName::from_static("x-audio-error"),
+        "Full-length stream resolution unavailable. Please download track via Soulseek or configure Tidal HiFi token.".parse().unwrap(),
+    );
+    res
 }
 
 pub async fn proxy_stream(target_url: &str, req: axum::extract::Request) -> Response {

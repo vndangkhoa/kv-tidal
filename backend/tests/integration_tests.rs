@@ -371,4 +371,28 @@ fn test_clean_query_title() {
     assert_eq!(clean_query_title("1999"), "1999");
 }
 
+#[tokio::test]
+async fn test_stream_vietnamese_track() {
+    let config = std::sync::Arc::new(tokio::sync::RwLock::new(kv_tidal::config::AppConfig::default()));
+    let trending = kv_tidal::trending::new_trending_store();
+    let library = kv_tidal::storage::scanner::new_library_store();
+    let state = kv_tidal::state::AppState::new(config, trending, library);
+
+    let router = kv_tidal::api::stream::router().with_state(state);
+    use tower_service::Service;
+    let uri = "/?artist=Anh%20Trai%20V%C6%B0%E1%BB%A3t%20Ng%C3%A0n%20Ch%C3%B4ng%20Gai&title=T%C3%8DCH%20T%E1%BB%8ACH%20T%C3%8CNH%20TANG&format=opus";
+    let req = axum::http::Request::builder()
+        .uri(uri)
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let mut router = router;
+    let res = router.call(req).await.unwrap();
+    println!("VN Track Status: {:?}", res.status());
+    for (name, val) in res.headers() {
+        println!("{}: {:?}", name, val);
+    }
+}
+
 

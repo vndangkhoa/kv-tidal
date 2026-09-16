@@ -210,5 +210,6 @@ chmod 666 "$SLSKD_CFG" 2>/dev/null || true
 
 chown -R sc-kvtidal:synocache "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true
 chmod 775 "$ETC_DIR" "$VAR_DIR" 2>/dev/null || true
+chmod 777 "$VAR_DIR/tmp" 2>/dev/null || true
 
 exit 0

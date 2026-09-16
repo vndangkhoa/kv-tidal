@@ -401,7 +401,6 @@ export default function SearchPage() {
       item.title
     )}`;
     if (item.stream_id) streamUrl += `&id=${encodeURIComponent(item.stream_id)}`;
-    if (item.preview_url) streamUrl += `&url=${encodeURIComponent(item.preview_url)}`;
 
     return {
       id: item.stream_id || item.id,

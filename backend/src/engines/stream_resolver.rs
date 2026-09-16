@@ -34,7 +34,12 @@ pub fn find_yt_dlp() -> Option<PathBuf> {
     }
 
     for candidate in &[
+        "./spk/bin/yt-dlp_linux",
+        "./spk/bin/yt-dlp",
         "/var/packages/kvtidal/target/bin/yt-dlp",
+        "/var/packages/kvtidal/target/bin/yt-dlp_linux",
+        "/var/packages/kv-tidal/target/bin/yt-dlp",
+        "/var/packages/kv-tidal/target/bin/yt-dlp_linux",
         "/usr/local/bin/yt-dlp",
         "/usr/bin/yt-dlp",
         "/bin/yt-dlp",
@@ -51,22 +56,26 @@ pub fn find_yt_dlp() -> Option<PathBuf> {
 
     // Check user home directory
     if let Ok(home) = std::env::var("HOME") {
-        let home_bin = PathBuf::from(home).join(".local/bin/yt-dlp");
-        if home_bin.exists() {
-            return Some(home_bin);
+        for sub in &[".local/bin/yt-dlp", ".local/bin/yt-dlp_linux", "bin/yt-dlp"] {
+            let home_bin = PathBuf::from(&home).join(sub);
+            if home_bin.exists() {
+                return Some(home_bin);
+            }
         }
     }
 
     // Check PATH
-    if std::process::Command::new("yt-dlp")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        return Some(PathBuf::from("yt-dlp"));
+    for bin_name in &["yt-dlp", "yt-dlp_linux"] {
+        if std::process::Command::new(bin_name)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Some(PathBuf::from(bin_name));
+        }
     }
 
     None
@@ -185,6 +194,54 @@ impl Default for StreamResolver {
     }
 }
 
+fn find_writable_tmp() -> PathBuf {
+    let test_write = |dir: &std::path::Path| -> bool {
+        let _ = std::fs::create_dir_all(dir);
+        let test_file = dir.join(format!(".write_test_{}", uuid::Uuid::new_v4()));
+        if std::fs::write(&test_file, b"ok").is_ok() {
+            let _ = std::fs::remove_file(test_file);
+            true
+        } else {
+            false
+        }
+    };
+
+    if let Ok(t) = std::env::var("TMPDIR") {
+        let pb = PathBuf::from(&t);
+        if test_write(&pb) {
+            return pb;
+        }
+    }
+
+    if let Ok(d) = std::env::var("DATA_DIR") {
+        let pb = PathBuf::from(d).join("tmp");
+        if test_write(&pb) {
+            return pb;
+        }
+    }
+
+    if let Ok(cfg) = std::env::var("CONFIG_PATH") {
+        if let Some(parent) = PathBuf::from(cfg).parent().and_then(|p| p.parent()) {
+            let pb = parent.join("var").join("tmp");
+            if test_write(&pb) {
+                return pb;
+            }
+        }
+    }
+
+    let local_data = PathBuf::from("./data/tmp");
+    if test_write(&local_data) {
+        return local_data;
+    }
+
+    let sys_temp = std::env::temp_dir();
+    if test_write(&sys_temp) {
+        return sys_temp;
+    }
+
+    PathBuf::from("/tmp")
+}
+
 impl StreamResolver {
     pub fn new() -> Self {
         let http_client = reqwest::Client::builder()
@@ -256,23 +313,37 @@ impl StreamResolver {
             }
         }
 
-        // Tier 2: Standalone yt-dlp binary (with custom TMPDIR)
+        // Tier 2: Standalone yt-dlp binary (with robust writable TMPDIR)
         let yt_binary = match find_yt_dlp() {
             Some(p) => Some(p),
             None => bootstrap_yt_dlp().await,
         };
 
         if let Some(yt_binary) = yt_binary {
-            let query = format!("ytsearch1:{} {}", artist, title);
-            let mut cmd = tokio::process::Command::new(&yt_binary);
-            cmd.args([&query, "--get-url", "-f", "ba/b", "--no-warnings"]);
+            let clean_title = crate::engines::soulseek::clean_query_title(title);
+            let primary_artist = artist
+                .split(&[',', '&', ';', '/'][..])
+                .next()
+                .unwrap_or(artist)
+                .trim();
+            let query = format!("ytsearch1:{} {}", primary_artist, clean_title);
 
-            let base_tmp = std::env::var("TMPDIR").ok().and_then(|t| {
-                if t != "/tmp" { Some(PathBuf::from(t)) } else { None }
-            }).unwrap_or_else(|| {
-                std::env::var("DATA_DIR").map(|d| PathBuf::from(d).join("tmp")).unwrap_or_else(|_| PathBuf::from("./data/tmp"))
-            });
-            let _ = std::fs::create_dir_all(&base_tmp);
+            let mut cmd = tokio::process::Command::new(&yt_binary);
+            cmd.args([
+                &query,
+                "--get-url",
+                "-f",
+                "ba/b",
+                "--no-warnings",
+                "--no-playlist",
+                "--no-check-certificates",
+                "--extractor-args",
+                "youtube:player_client=android,mweb,web",
+                "--socket-timeout",
+                "10",
+            ]);
+
+            let base_tmp = find_writable_tmp();
             cmd.env("TMPDIR", &base_tmp);
 
             match cmd.output().await {
@@ -301,7 +372,11 @@ impl StreamResolver {
         }
 
         // Tier 3: Public Invidious instances as high-reliability fallback
-        for base in &["https://inv.tux.pizza", "https://invidious.nerdvpn.de", "https://yewtu.be"] {
+        for base in &[
+            "https://invidious.f5.si",
+            "https://inv.nadeko.net",
+            "https://invidious.privacydev.net",
+        ] {
             if let Some(url) = resolve_via_invidious(&self.http_client, base, artist, title).await {
                 let mut c = self.cache.write().await;
                 c.insert(key.clone(), (url.clone(), std::time::Instant::now()));

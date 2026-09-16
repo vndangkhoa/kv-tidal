@@ -58,8 +58,8 @@ if [ ! -f "$YT_DLP_STANDALONE" ] || [ $(stat -c%s "$YT_DLP_STANDALONE" 2>/dev/nu
     curl -sL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" -o "$YT_DLP_STANDALONE"
     chmod +x "$YT_DLP_STANDALONE"
 fi
-echo "Bundling standalone self-contained yt-dlp_linux into SPK package..."
 cp "$YT_DLP_STANDALONE" "$STAGE_DIR/package/bin/yt-dlp"
+cp "$YT_DLP_STANDALONE" "$STAGE_DIR/package/bin/yt-dlp_linux"
 
 # Bundle standalone self-contained ELF slskd (Soulseek Lossless P2P Daemon)
 SLSKD_ZIP="$ROOT_DIR/spk/bin/slskd-0.26.0-linux-x64.zip"

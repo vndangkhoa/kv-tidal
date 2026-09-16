@@ -529,7 +529,7 @@ async fn run_download_pipeline(
     if audio_bytes_opt.is_none() && !token.is_cancelled() {
         let clean_t = crate::engines::soulseek::clean_query_title(&payload.title);
         let stream_url = if let Some(ref u) = payload.stream_url {
-            if !u.trim().is_empty() && !u.starts_with('/') {
+            if !u.trim().is_empty() && !u.starts_with('/') && !u.contains("apple.com") && !u.contains("mzstatic.com") {
                 Some(u.clone())
             } else {
                 state.resolver.resolve_full_stream(&payload.artist, &clean_t).await

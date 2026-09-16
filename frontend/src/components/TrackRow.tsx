@@ -74,9 +74,6 @@ export const TrackRow = React.memo(function TrackRow({
       if (streamId) {
         streamUrl += `&id=${encodeURIComponent(streamId)}`;
       }
-      if (previewUrl) {
-        streamUrl += `&url=${encodeURIComponent(previewUrl)}`;
-      }
 
       const newTrack: PlayableTrack = {
         id: streamId || `${artist}-${title}`,
@@ -117,7 +114,7 @@ export const TrackRow = React.memo(function TrackRow({
       track_number: rank,
       duration,
       cover_url: coverUrl,
-      stream_url: previewUrl,
+      stream_url: undefined,
       track_id: streamId,
       source: source || "tidal",
     });
@@ -301,7 +298,6 @@ export const TrackRow = React.memo(function TrackRow({
               e.stopPropagation();
               let streamUrl = `/api/stream?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`;
               if (streamId) streamUrl += `&id=${encodeURIComponent(streamId)}`;
-              if (previewUrl) streamUrl += `&url=${encodeURIComponent(previewUrl)}`;
               addToQueue({
                 id: streamId || `${artist}-${title}`,
                 title,
@@ -462,7 +458,6 @@ export const TrackRow = React.memo(function TrackRow({
                   e.stopPropagation();
                   let streamUrl = `/api/stream?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`;
                   if (streamId) streamUrl += `&id=${encodeURIComponent(streamId)}`;
-                  if (previewUrl) streamUrl += `&url=${encodeURIComponent(previewUrl)}`;
                   addToQueue({
                     id: streamId || `${artist}-${title}`,
                     title,

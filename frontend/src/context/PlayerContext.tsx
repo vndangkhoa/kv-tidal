@@ -204,9 +204,6 @@ export function searchResultToPlayableTrack(item: SearchResultItem): PlayableTra
   if (item.stream_id) {
     streamUrl += `&id=${encodeURIComponent(item.stream_id)}`;
   }
-  if (item.preview_url) {
-    streamUrl += `&url=${encodeURIComponent(item.preview_url)}`;
-  }
   return {
     id: item.stream_id || `${item.artist}-${item.title}`,
     title: item.title,
