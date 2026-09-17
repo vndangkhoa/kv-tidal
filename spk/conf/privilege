@@ -3,8 +3,5 @@
     "run-as": "package"
   },
   "username": "sc-kvtidal",
-  "groupname": "synocache",
-  "join-group": [
-    "administrators"
-  ]
+  "groupname": "synocache"
 }

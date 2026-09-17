@@ -4,6 +4,14 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-29] - 2026-09-17
+
+### Fixed & Improved
+- **100% Statically Linked Pure-Rust Backend (Musl + Rustls)**: Resolved the critical DSM package launch failure caused by host GLIBC 2.39 and dynamic OpenSSL 3 dependencies. Switched to `rustls-tls` and compiled with `x86_64-unknown-linux-musl`, producing a self-contained static binary with zero external GLIBC and OpenSSL dependencies, fully compatible with all Synology DSM 7.0, 7.1, and 7.2 models.
+- **Restored DSM Main Menu & Package Center Launcher**: Re-added `dsmappname="com.khoavo.kvtidal"` to `spk/INFO` and upgraded `ui/config` to use standard DSM protocol/port dynamic resolution, allowing 1-click launch from the DSM Package Center and Main Menu.
+- **DSM 7 Privilege & Resource Clean-Up**: Removed unauthorized `join-group: ["administrators"]` and cleaned up empty `systemd-unit` declarations to comply strictly with DSM 7 package sandbox policies.
+- **Robust Daemon Lifecycle & Startup Verification**: Enhanced `start-stop-status` with immediate startup health verification.
+
 ## [1.0.0-28] - 2026-09-16
 
 ### Fixed & Improved

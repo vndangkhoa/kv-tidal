@@ -6,7 +6,9 @@
             "icon": "images/KVTidal-{0}.png",
             "title": "KV-Tidal",
             "type": "url",
-            "url": "http://@HOST@:@PORT@/"
+            "protocol": "http",
+            "port": "26784",
+            "url": "/"
         }
     }
 }

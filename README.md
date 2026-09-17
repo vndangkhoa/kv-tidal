@@ -10,7 +10,7 @@
 
 [![GitHub Stars](https://img.shields.io/github/stars/vndangkhoa/kv-tidal?style=flat-square&logo=github&color=gold)](https://github.com/vndangkhoa/kv-tidal/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/vndangkhoa/kv-tidal?style=flat-square&logo=github&color=blue)](https://github.com/vndangkhoa/kv-tidal/network/members)
-[![Synology SPK](https://img.shields.io/badge/Synology_SPK-v1.0.0--27-blue?style=flat-square&logo=synology)](https://syno.vndns.net/package/kvtidal)
+[![Synology SPK](https://img.shields.io/badge/Synology_SPK-v1.0.0--29-blue?style=flat-square&logo=synology)](https://syno.vndns.net/package/kvtidal)
 [![Docker Hub](https://img.shields.io/badge/Docker_Hub-vndangkhoa%2Fkv--tidal-2496ED?style=flat-square&logo=docker)](https://hub.docker.com/r/vndangkhoa/kv-tidal)
 [![Engine: Rust 1.85](https://img.shields.io/badge/Engine-Rust_1.85_Axum-DEA584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Frontend: Next.js 15](https://img.shields.io/badge/Frontend-Next.js_15_%2B_React_19-000000?style=flat-square&logo=next.js)](https://nextjs.org/)
@@ -122,7 +122,7 @@ Running as a native DSM package consumes **less than 25MB RAM** with near-zero C
 
 #### Method B: Manual SPK Install
 1. Download the latest package:
-   - **[⬇️ Download kvtidal-1.0.0-27.spk](https://spk.khoavo.myds.me/kvtidal-1.0.0-27.spk)**
+   - **[⬇️ Download kvtidal-1.0.0-29.spk](https://syno.vndns.net/package/kvtidal)**
 2. In DSM **Package Center**, click **Manual Install** in the top right.
 3. Select `kvtidal-1.0.0-27.spk` and follow the setup wizard:
    - **Music Directory**: Automatically defaults to `/volume2/music` or `/volume1/music`.

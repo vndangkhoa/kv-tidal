@@ -27,6 +27,7 @@ start_daemon() {
         if [ -n "$CFG_PORT" ]; then
             if [ -f "${INSTALL_DIR}/ui/config" ]; then
                 sed -i -E "s|:[0-9]+/?\"|:${CFG_PORT}/\"|g" "${INSTALL_DIR}/ui/config"
+                sed -i -E "s/\"port\":[[:space:]]*\"[0-9]+\"/\"port\": \"${CFG_PORT}\"/" "${INSTALL_DIR}/ui/config"
             fi
             if [ -f "/var/packages/${PACKAGE}/INFO" ]; then
                 sed -i -E "s/^adminport=.*/adminport=\"${CFG_PORT}\"/" "/var/packages/${PACKAGE}/INFO"
@@ -62,7 +63,14 @@ start_daemon() {
     fi
 
     nohup "$DAEMON" </dev/null >> "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
+    DAEMON_PID=$!
+    echo $DAEMON_PID > "$PID_FILE"
+    sleep 1
+    if ! kill -0 $DAEMON_PID 2>/dev/null; then
+        rm -f "$PID_FILE"
+        return 1
+    fi
+    return 0
 }
 
 stop_daemon() {

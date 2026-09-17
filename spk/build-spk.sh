@@ -22,31 +22,41 @@ if [ -d "$ROOT_DIR/spk/ui" ]; then
     cp -r "$ROOT_DIR/spk/ui/"* "$STAGE_DIR/package/ui/"
 fi
 
-if docker image inspect vndangkhoa/kv-tidal:latest >/dev/null 2>&1; then
-    echo "Using Debian Bookworm (GLIBC 2.36 compatible) binary from docker image..."
-    CID=$(docker create vndangkhoa/kv-tidal:latest)
-    docker cp "$CID:/app/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
-    if [ -d "$ROOT_DIR/frontend/out" ]; then
-        echo "Using fresh frontend build from frontend/out..."
-        cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
+# Prioritize static musl binary (100% DSM 7.0 - 7.2 compatible, zero GLIBC/OpenSSL dependencies)
+MUSL_BIN="$ROOT_DIR/backend/target/x86_64-unknown-linux-musl/release/kv-tidal"
+if [ ! -f "$MUSL_BIN" ]; then
+    echo "Compiling static musl release binary for Synology DSM..."
+    if docker image inspect kv-tidal-builder >/dev/null 2>&1; then
+        docker run --rm \
+          -v "$ROOT_DIR/backend:/app" \
+          -v "$HOME/.cargo/registry:/usr/local/cargo/registry" \
+          -v "$HOME/.cargo/git:/usr/local/cargo/git" \
+          -w /app \
+          kv-tidal-builder \
+          cargo build --release --target x86_64-unknown-linux-musl
     else
-        docker cp "$CID:/app/web/." "$STAGE_DIR/package/web/"
+        cd "$ROOT_DIR/backend"
+        cargo build --release --target x86_64-unknown-linux-musl
     fi
-    docker rm -f "$CID" >/dev/null
+fi
+
+if [ -f "$MUSL_BIN" ]; then
+    echo "Using statically linked musl binary ($MUSL_BIN)..."
+    strip "$MUSL_BIN" 2>/dev/null || true
+    cp "$MUSL_BIN" "$STAGE_DIR/package/bin/kv-tidal"
+    cp "$MUSL_BIN" "$ROOT_DIR/backend/target/release/kv-tidal" 2>/dev/null || true
 elif [ -f "$ROOT_DIR/backend/target/release/kv-tidal" ]; then
-    echo "Using release binary from backend/target/release/kv-tidal..."
+    echo "Falling back to release binary from backend/target/release/kv-tidal..."
     cp "$ROOT_DIR/backend/target/release/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
-    if [ -d "$ROOT_DIR/frontend/out" ]; then
-        echo "Using fresh frontend build from frontend/out..."
-        cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
-    fi
+fi
+
+if [ -d "$ROOT_DIR/frontend/out" ]; then
+    echo "Using fresh frontend build from frontend/out..."
+    cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
 else
-    echo "Docker image not found, building frontend & backend on host..."
+    echo "Building frontend..."
     cd "$ROOT_DIR/frontend"
     npm run build
-    cd "$ROOT_DIR/backend"
-    cargo build --release
-    cp "$ROOT_DIR/backend/target/release/kv-tidal" "$STAGE_DIR/package/bin/kv-tidal"
     cp -r "$ROOT_DIR/frontend/out/"* "$STAGE_DIR/package/web/"
 fi
 

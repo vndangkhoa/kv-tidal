@@ -151,6 +151,7 @@ HOST_IP="$(lan_ip)"
 [ -z "$HOST_IP" ] && HOST_IP="localhost"
 if [ -f "${INSTALL_DIR}/ui/config" ]; then
     sed -i "s/@HOST@/${HOST_IP}/g; s/@PORT@/${PORT}/g" "${INSTALL_DIR}/ui/config"
+    sed -i -E "s/\"port\":[[:space:]]*\"[0-9]+\"/\"port\": \"${PORT}\"/" "${INSTALL_DIR}/ui/config"
 fi
 if [ -f "/var/packages/${PACKAGE}/INFO" ]; then
     sed -i "s/^adminport=.*/adminport=\"${PORT}\"/" "/var/packages/${PACKAGE}/INFO"
