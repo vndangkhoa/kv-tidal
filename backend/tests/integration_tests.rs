@@ -395,4 +395,63 @@ async fn test_stream_vietnamese_track() {
     }
 }
 
+#[tokio::test]
+async fn test_subsonic_endpoints() {
+    use tower_service::Service;
+
+    let config = std::sync::Arc::new(tokio::sync::RwLock::new(kv_tidal::config::AppConfig::default()));
+    let trending = kv_tidal::trending::new_trending_store();
+    let library = kv_tidal::storage::scanner::new_library_store();
+    let state = kv_tidal::state::AppState::new(config, trending, library);
+
+    let router = kv_tidal::subsonic::router().with_state(state);
+
+    // 1. Test getUser.view
+    let req = axum::http::Request::builder()
+        .uri("/getUser.view?u=admin&f=json&username=admin")
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let mut router_clone = router.clone();
+    let res = router_clone.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["subsonic-response"]["status"], "ok");
+    assert_eq!(json["subsonic-response"]["user"]["username"], "admin");
+    assert_eq!(json["subsonic-response"]["user"]["adminRole"], true);
+
+    // 2. Test getUsers.view
+    let req = axum::http::Request::builder()
+        .uri("/getUsers.view?u=admin&f=json")
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let mut router_clone = router.clone();
+    let res = router_clone.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    // 3. Test getArtists.view
+    let req = axum::http::Request::builder()
+        .uri("/getArtists.view?u=admin&f=json")
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let mut router_clone = router.clone();
+    let res = router_clone.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    // 4. Test getAlbumList2.view
+    let req = axum::http::Request::builder()
+        .uri("/getAlbumList2.view?u=admin&f=json&type=newest")
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let mut router_clone = router.clone();
+    let res = router_clone.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+}
+
+
 

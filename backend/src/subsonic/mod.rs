@@ -24,6 +24,11 @@ pub struct SubsonicParams {
     pub query: Option<String>,
     pub artist: Option<String>,
     pub count: Option<usize>,
+    pub username: Option<String>,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub size: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[allow(dead_code)]
@@ -65,6 +70,66 @@ fn subsonic_json(data: serde_json::Value) -> Response {
 // GET /rest/ping.view
 async fn ping(Query(_params): Query<SubsonicParams>, State(_state): State<AppState>) -> Response {
     subsonic_json(json!({}))
+}
+
+// GET /rest/getUser.view
+async fn get_user(Query(params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let cfg = state.config.read().await;
+    let req_user = params
+        .username
+        .as_deref()
+        .or(params.u.as_deref())
+        .unwrap_or(&cfg.subsonic_user);
+
+    subsonic_json(json!({
+        "user": {
+            "username": req_user,
+            "email": format!("{}@kv-tidal.local", req_user),
+            "scrobblingEnabled": true,
+            "adminRole": true,
+            "settingsRole": true,
+            "downloadRole": true,
+            "uploadRole": true,
+            "playlistRole": true,
+            "coverArtRole": true,
+            "commentRole": true,
+            "podcastRole": true,
+            "streamRole": true,
+            "jukeboxRole": true,
+            "shareRole": true,
+            "videoConversionRole": false
+        }
+    }))
+}
+
+// GET /rest/getUsers.view
+async fn get_users(Query(_params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let cfg = state.config.read().await;
+    let req_user = &cfg.subsonic_user;
+
+    subsonic_json(json!({
+        "users": {
+            "user": [
+                {
+                    "username": req_user,
+                    "email": format!("{}@kv-tidal.local", req_user),
+                    "scrobblingEnabled": true,
+                    "adminRole": true,
+                    "settingsRole": true,
+                    "downloadRole": true,
+                    "uploadRole": true,
+                    "playlistRole": true,
+                    "coverArtRole": true,
+                    "commentRole": true,
+                    "podcastRole": true,
+                    "streamRole": true,
+                    "jukeboxRole": true,
+                    "shareRole": true,
+                    "videoConversionRole": false
+                }
+            ]
+        }
+    }))
 }
 
 // GET /rest/getLicense.view
@@ -215,6 +280,406 @@ async fn search_3(Query(params): Query<SubsonicParams>, State(state): State<AppS
             "album": matched_albums,
             "artist": matched_artists
         }
+    }))
+}
+
+// GET /rest/search2.view
+async fn search_2(Query(params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let query_str = params.query.unwrap_or_default().to_lowercase();
+    let lib = state.library.read().await;
+
+    let mut matched_songs = Vec::new();
+    let mut matched_albums = Vec::new();
+    let mut matched_artists = Vec::new();
+
+    for track in lib.tracks.values() {
+        if query_str.is_empty()
+            || track.title.to_lowercase().contains(&query_str)
+            || track.artist.to_lowercase().contains(&query_str)
+        {
+            matched_songs.push(json!({
+                "id": track.id,
+                "title": track.title,
+                "artist": track.artist,
+                "album": track.album,
+                "duration": track.duration,
+                "track": track.track_number,
+                "year": track.year,
+                "coverArt": format!("cover-{}", track.id),
+                "contentType": format!("audio/{}", track.format),
+                "suffix": track.format,
+                "bitRate": track.bitrate,
+                "samplingRate": track.sample_rate,
+                "bitDepth": track.bit_depth,
+            }));
+            if matched_songs.len() >= 50 {
+                break;
+            }
+        }
+    }
+
+    for album in lib.albums.values() {
+        if query_str.is_empty()
+            || album.name.to_lowercase().contains(&query_str)
+            || album.artist.to_lowercase().contains(&query_str)
+        {
+            matched_albums.push(json!({
+                "id": album.id,
+                "name": album.name,
+                "artist": album.artist,
+                "songCount": album.track_count,
+                "year": album.year,
+                "coverArt": format!("album-{}", album.id),
+            }));
+            if matched_albums.len() >= 20 {
+                break;
+            }
+        }
+    }
+
+    for artist in lib.artists.values() {
+        if query_str.is_empty() || artist.name.to_lowercase().contains(&query_str) {
+            matched_artists.push(json!({
+                "id": artist.id,
+                "name": artist.name,
+                "albumCount": artist.album_count,
+                "coverArt": format!("artist-{}", artist.id),
+            }));
+            if matched_artists.len() >= 20 {
+                break;
+            }
+        }
+    }
+
+    subsonic_json(json!({
+        "searchResult2": {
+            "song": matched_songs,
+            "album": matched_albums,
+            "artist": matched_artists
+        }
+    }))
+}
+
+// GET /rest/getArtists.view
+async fn get_artists(Query(_params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let lib = state.library.read().await;
+    use std::collections::BTreeMap;
+    let mut grouped: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+
+    let mut artists: Vec<_> = lib.artists.values().collect();
+    artists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    for a in artists {
+        let first_char = a.name.chars().next().unwrap_or('#').to_uppercase().to_string();
+        let key = if first_char.chars().all(|c| c.is_alphabetic()) {
+            first_char
+        } else {
+            "#".to_string()
+        };
+        grouped.entry(key).or_default().push(json!({
+            "id": a.id,
+            "name": a.name,
+            "albumCount": a.album_count,
+            "coverArt": format!("artist-{}", a.id),
+            "artistImageUrl": format!("/rest/getCoverArt.view?id=artist-{}", a.id),
+        }));
+    }
+
+    let mut index_vec = Vec::new();
+    for (name, artist_list) in grouped {
+        index_vec.push(json!({
+            "name": name,
+            "artist": artist_list,
+        }));
+    }
+
+    subsonic_json(json!({
+        "artists": {
+            "ignoredArticles": "The El La Los Las Le Les",
+            "index": index_vec,
+        }
+    }))
+}
+
+// GET /rest/getArtist.view
+async fn get_artist(Query(params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let id = params.id.unwrap_or_default();
+    let lib = state.library.read().await;
+
+    if let Some(artist) = lib.artists.get(&id) {
+        let mut artist_albums = Vec::new();
+        for album in lib.albums.values() {
+            if album.artist.eq_ignore_ascii_case(&artist.name) {
+                artist_albums.push(json!({
+                    "id": album.id,
+                    "name": album.name,
+                    "artist": album.artist,
+                    "artistId": artist.id,
+                    "year": album.year,
+                    "songCount": album.track_count,
+                    "coverArt": format!("album-{}", album.id),
+                    "duration": 0,
+                }));
+            }
+        }
+        artist_albums.sort_by(|a, b| {
+            let ya = a["year"].as_u64().unwrap_or(0);
+            let yb = b["year"].as_u64().unwrap_or(0);
+            yb.cmp(&ya)
+        });
+
+        subsonic_json(json!({
+            "artist": {
+                "id": artist.id,
+                "name": artist.name,
+                "albumCount": artist.album_count,
+                "coverArt": format!("artist-{}", artist.id),
+                "album": artist_albums,
+            }
+        }))
+    } else {
+        subsonic_json(json!({
+            "artist": {
+                "id": id,
+                "name": "Unknown Artist",
+                "albumCount": 0,
+                "album": [],
+            }
+        }))
+    }
+}
+
+// GET /rest/getAlbum.view
+async fn get_album(Query(params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let id = params.id.unwrap_or_default();
+    let lib = state.library.read().await;
+
+    if let Some(album) = lib.albums.get(&id) {
+        let mut songs = Vec::new();
+        let mut total_duration = 0u32;
+
+        let mut album_tracks: Vec<_> = lib
+            .tracks
+            .values()
+            .filter(|t| t.album.eq_ignore_ascii_case(&album.name) && (album.artist.is_empty() || t.artist.eq_ignore_ascii_case(&album.artist)))
+            .collect();
+        album_tracks.sort_by_key(|t| t.track_number);
+
+        for track in album_tracks {
+            total_duration += track.duration;
+            songs.push(json!({
+                "id": track.id,
+                "parent": album.id,
+                "title": track.title,
+                "artist": track.artist,
+                "album": track.album,
+                "albumId": album.id,
+                "track": track.track_number,
+                "year": track.year,
+                "duration": track.duration,
+                "bitRate": track.bitrate,
+                "samplingRate": track.sample_rate,
+                "bitDepth": track.bit_depth,
+                "coverArt": format!("cover-{}", track.id),
+                "contentType": format!("audio/{}", track.format),
+                "suffix": track.format,
+                "isVideo": false,
+            }));
+        }
+
+        subsonic_json(json!({
+            "album": {
+                "id": album.id,
+                "name": album.name,
+                "title": album.name,
+                "artist": album.artist,
+                "year": album.year,
+                "songCount": album.track_count,
+                "coverArt": format!("album-{}", album.id),
+                "duration": total_duration,
+                "song": songs,
+            }
+        }))
+    } else {
+        subsonic_json(json!({
+            "album": {
+                "id": id,
+                "name": "Unknown Album",
+                "artist": "Unknown Artist",
+                "songCount": 0,
+                "song": [],
+            }
+        }))
+    }
+}
+
+// GET /rest/getAlbumList2.view
+async fn get_album_list_2(Query(params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let lib = state.library.read().await;
+    let size = params.size.unwrap_or(20).min(500);
+    let offset = params.offset.unwrap_or(0);
+
+    let mut albums: Vec<_> = lib.albums.values().collect();
+    let type_str = params.type_.as_deref().unwrap_or("alphabeticalByName");
+    match type_str {
+        "newest" | "recent" => albums.sort_by(|a, b| b.year.unwrap_or(0).cmp(&a.year.unwrap_or(0))),
+        "byYear" => albums.sort_by(|a, b| b.year.unwrap_or(0).cmp(&a.year.unwrap_or(0))),
+        "alphabeticalByArtist" => albums.sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase())),
+        _ => albums.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+    }
+
+    let paged = albums.into_iter().skip(offset).take(size);
+    let album_json: Vec<_> = paged.map(|album| {
+        json!({
+            "id": album.id,
+            "name": album.name,
+            "title": album.name,
+            "artist": album.artist,
+            "year": album.year,
+            "songCount": album.track_count,
+            "coverArt": format!("album-{}", album.id),
+            "playCount": 0,
+        })
+    }).collect();
+
+    subsonic_json(json!({
+        "albumList2": {
+            "album": album_json,
+        }
+    }))
+}
+
+// GET /rest/getAlbumList.view
+async fn get_album_list(Query(params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let lib = state.library.read().await;
+    let size = params.size.unwrap_or(20).min(500);
+    let offset = params.offset.unwrap_or(0);
+
+    let mut albums: Vec<_> = lib.albums.values().collect();
+    albums.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let album_json: Vec<_> = albums.into_iter().skip(offset).take(size).map(|album| {
+        json!({
+            "id": album.id,
+            "name": album.name,
+            "title": album.name,
+            "artist": album.artist,
+            "year": album.year,
+            "songCount": album.track_count,
+            "coverArt": format!("album-{}", album.id),
+        })
+    }).collect();
+
+    subsonic_json(json!({
+        "albumList": {
+            "album": album_json,
+        }
+    }))
+}
+
+// GET /rest/getIndexes.view
+async fn get_indexes(Query(_params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let lib = state.library.read().await;
+    use std::collections::BTreeMap;
+    let mut grouped: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+
+    let mut artists: Vec<_> = lib.artists.values().collect();
+    artists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    for a in artists {
+        let first_char = a.name.chars().next().unwrap_or('#').to_uppercase().to_string();
+        let key = if first_char.chars().all(|c| c.is_alphabetic()) {
+            first_char
+        } else {
+            "#".to_string()
+        };
+        grouped.entry(key).or_default().push(json!({
+            "id": a.id,
+            "name": a.name,
+        }));
+    }
+
+    let mut index_vec = Vec::new();
+    for (name, artist_list) in grouped {
+        index_vec.push(json!({
+            "name": name,
+            "artist": artist_list,
+        }));
+    }
+
+    subsonic_json(json!({
+        "indexes": {
+            "lastModified": 1700000000000u64,
+            "ignoredArticles": "The El La Los Las Le Les",
+            "index": index_vec,
+        }
+    }))
+}
+
+// GET /rest/getSong.view
+async fn get_song(Query(params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let id = params.id.unwrap_or_default();
+    let lib = state.library.read().await;
+
+    if let Some(track) = lib.tracks.get(&id) {
+        subsonic_json(json!({
+            "song": {
+                "id": track.id,
+                "title": track.title,
+                "artist": track.artist,
+                "album": track.album,
+                "track": track.track_number,
+                "year": track.year,
+                "duration": track.duration,
+                "bitRate": track.bitrate,
+                "samplingRate": track.sample_rate,
+                "bitDepth": track.bit_depth,
+                "coverArt": format!("cover-{}", track.id),
+                "contentType": format!("audio/{}", track.format),
+                "suffix": track.format,
+                "isVideo": false,
+            }
+        }))
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+// GET /rest/getGenres.view
+async fn get_genres(Query(_params): Query<SubsonicParams>, State(_state): State<AppState>) -> Response {
+    subsonic_json(json!({
+        "genres": {
+            "genre": []
+        }
+    }))
+}
+
+// GET /rest/scanStatus.view
+async fn scan_status(Query(_params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let lib = state.library.read().await;
+    subsonic_json(json!({
+        "scanStatus": {
+            "scanning": lib.is_scanning,
+            "count": lib.tracks.len()
+        }
+    }))
+}
+
+// GET /rest/startScan.view
+async fn start_scan(Query(_params): Query<SubsonicParams>, State(state): State<AppState>) -> Response {
+    let lib = state.library.read().await;
+    subsonic_json(json!({
+        "scanStatus": {
+            "scanning": lib.is_scanning,
+            "count": lib.tracks.len()
+        }
+    }))
+}
+
+// GET /rest/getOpenSubsonicExtensions.view
+async fn get_open_subsonic_extensions(Query(_params): Query<SubsonicParams>, State(_state): State<AppState>) -> Response {
+    subsonic_json(json!({
+        "openSubsonic": true,
+        "openSubsonicExtensions": []
     }))
 }
 
@@ -479,14 +944,42 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/ping.view", get(ping))
         .route("/ping", get(ping))
+        .route("/getUser.view", get(get_user))
+        .route("/getUser", get(get_user))
+        .route("/getUsers.view", get(get_users))
+        .route("/getUsers", get(get_users))
         .route("/getLicense.view", get(get_license))
         .route("/getLicense", get(get_license))
         .route("/getMusicFolders.view", get(get_music_folders))
         .route("/getMusicFolders", get(get_music_folders))
+        .route("/getArtists.view", get(get_artists))
+        .route("/getArtists", get(get_artists))
+        .route("/getArtist.view", get(get_artist))
+        .route("/getArtist", get(get_artist))
+        .route("/getAlbum.view", get(get_album))
+        .route("/getAlbum", get(get_album))
+        .route("/getAlbumList.view", get(get_album_list))
+        .route("/getAlbumList", get(get_album_list))
+        .route("/getAlbumList2.view", get(get_album_list_2))
+        .route("/getAlbumList2", get(get_album_list_2))
+        .route("/getIndexes.view", get(get_indexes))
+        .route("/getIndexes", get(get_indexes))
+        .route("/getSong.view", get(get_song))
+        .route("/getSong", get(get_song))
+        .route("/getGenres.view", get(get_genres))
+        .route("/getGenres", get(get_genres))
         .route("/getTopSongs.view", get(get_top_songs))
         .route("/getTopSongs", get(get_top_songs))
+        .route("/search2.view", get(search_2))
+        .route("/search2", get(search_2))
         .route("/search3.view", get(search_3))
         .route("/search3", get(search_3))
+        .route("/scanStatus.view", get(scan_status))
+        .route("/scanStatus", get(scan_status))
+        .route("/startScan.view", get(start_scan))
+        .route("/startScan", get(start_scan))
+        .route("/getOpenSubsonicExtensions.view", get(get_open_subsonic_extensions))
+        .route("/getOpenSubsonicExtensions", get(get_open_subsonic_extensions))
         .route("/getCoverArt.view", get(get_cover_art))
         .route("/getCoverArt", get(get_cover_art))
         .route("/stream.view", get(stream_track))

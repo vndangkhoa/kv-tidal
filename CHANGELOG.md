@@ -4,6 +4,13 @@ All notable changes to KV-Tidal will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0-30] - 2026-09-22
+
+### Fixed & Added
+- **Full Subsonic Client Authentication Handshake (`getUser.view` / `getUsers.view`)**: Implemented full OpenSubsonic & Subsonic API endpoints `getUser.view`, `getUser`, `getUsers.view`, and `getUsers`. Resolves the `HTTP 404 Authentication Error` when logging in from iOS and Android Subsonic clients like **Arpeggi**, **Play:Sub**, **DSub**, **Symfonium**, and **Feishin**.
+- **Complete OpenSubsonic Library Browsing API**: Added support for `getArtists.view`, `getArtist.view`, `getAlbum.view`, `getAlbumList.view`, `getAlbumList2.view`, `getIndexes.view`, `getSong.view`, `getGenres.view`, `scanStatus.view`, and `getOpenSubsonicExtensions.view`. Third-party Subsonic apps can now browse albums, artists, tracks, and start playback directly.
+- **Support for `search2.view`**: Added fallback search endpoint compatible with older Subsonic client implementations.
+
 ## [1.0.0-29] - 2026-09-17
 
 ### Fixed & Improved
