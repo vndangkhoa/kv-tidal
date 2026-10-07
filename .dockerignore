@@ -19,6 +19,9 @@ server.log
 build_spk/
 dist/
 *.spk
+*.apk
+mobile/
+spk/
 
 # Git
 .git/
