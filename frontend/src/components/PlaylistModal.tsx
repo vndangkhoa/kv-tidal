@@ -75,25 +75,34 @@ export function PlaylistModal({ isOpen, onClose, playlist }: PlaylistModalProps)
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
 
+  const resolveStreamId = (t: SearchResultItem): string | undefined => {
+    if (t.stream_id) return t.stream_id;
+    if (t.id && (t.id.startsWith("tidal-") || /^\d+$/.test(t.id))) return t.id;
+    return undefined;
+  };
+
   const queueItems: PlayableTrack[] = useMemo(() => {
-    return tracks.map((t) => ({
-      id: t.stream_id || `pl-${t.artist}-${t.title}`,
-      title: t.title,
-      artist: t.artist,
-      album: t.album,
-      coverUrl: t.cover_url,
-      streamUrl: `/api/stream?artist=${encodeURIComponent(t.artist)}&title=${encodeURIComponent(
-        t.title
-      )}${t.stream_id ? `&id=${encodeURIComponent(t.stream_id)}` : ""}`,
-      duration: t.duration,
-      bitDepth: t.bit_depth || 24,
-      sampleRate: t.sample_rate || 96000,
-      bitrate: t.bitrate || 2850,
-      format: t.format || "FLAC",
-      hires: t.hires,
-      source: t.source || "tidal",
-      drScore: t.dr_score || 13,
-    }));
+    return tracks.map((t) => {
+      const sid = resolveStreamId(t);
+      return {
+        id: sid || `pl-${t.artist}-${t.title}`,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        coverUrl: t.cover_url,
+        streamUrl: `/api/stream?artist=${encodeURIComponent(t.artist)}&title=${encodeURIComponent(
+          t.title
+        )}${sid ? `&id=${encodeURIComponent(sid)}` : ""}`,
+        duration: t.duration,
+        bitDepth: t.bit_depth || 24,
+        sampleRate: t.sample_rate || 96000,
+        bitrate: t.bitrate || 2850,
+        format: t.format || "FLAC",
+        hires: t.hires,
+        source: t.source || "tidal",
+        drScore: t.dr_score || 13,
+      };
+    });
   }, [tracks]);
 
   const filteredTracks = useMemo(() => {
@@ -355,7 +364,7 @@ export function PlaylistModal({ isOpen, onClose, playlist }: PlaylistModalProps)
                 album={t.album}
                 coverUrl={t.cover_url}
                 previewUrl={t.preview_url}
-                streamId={t.stream_id}
+                streamId={resolveStreamId(t)}
                 source={t.source}
                 hires={t.hires}
                 bitDepth={t.bit_depth || 24}

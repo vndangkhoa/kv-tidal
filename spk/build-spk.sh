@@ -36,6 +36,9 @@ if [ ! -f "$MUSL_BIN" ]; then
           cargo build --release --target x86_64-unknown-linux-musl
     else
         cd "$ROOT_DIR/backend"
+        if ! command -v x86_64-linux-musl-gcc >/dev/null 2>&1; then
+            export CC_x86_64_unknown_linux_musl="${CC_x86_64_unknown_linux_musl:-gcc}"
+        fi
         cargo build --release --target x86_64-unknown-linux-musl
     fi
 fi

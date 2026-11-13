@@ -749,30 +749,37 @@ fn get_image_mime(path: &Path) -> &'static str {
                 }
             }
 
-            // Inspect embedded artwork in the audio file using lofty
-            if track.file_path.exists() {
-                if let Ok(probe) = lofty::probe::Probe::open(&track.file_path) {
-                    if let Ok(tagged_file) = probe.read() {
-                        if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
-                            if let Some(pic) = tag.pictures().first() {
-                                let mime = match pic.mime_type() {
-                                    Some(lofty::picture::MimeType::Png) => "image/png",
-                                    _ => "image/jpeg",
-                                };
-                                let pic_data = pic.data().to_vec();
-                                let covers_dir = data_dir.join("covers");
-                                let _ = tokio::fs::create_dir_all(&covers_dir).await;
-                                let _ = tokio::fs::write(&cache_path, &pic_data).await;
-                                return (
-                                    [
-                                        (header::CONTENT_TYPE, mime),
-                                        (header::CACHE_CONTROL, "public, max-age=86400"),
-                                    ],
-                                    pic_data,
-                                ).into_response();
+            // Inspect embedded artwork in the audio file using lofty on a blocking thread
+            let probe_path = track.file_path.clone();
+            if probe_path.exists() {
+                if let Ok(Some((mime, pic_data))) = tokio::task::spawn_blocking(move || {
+                    if let Ok(probe) = lofty::probe::Probe::open(&probe_path) {
+                        if let Ok(tagged_file) = probe.read() {
+                            if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+                                if let Some(pic) = tag.pictures().first() {
+                                    let mime = match pic.mime_type() {
+                                        Some(lofty::picture::MimeType::Png) => "image/png",
+                                        _ => "image/jpeg",
+                                    };
+                                    return Some((mime, pic.data().to_vec()));
+                                }
                             }
                         }
                     }
+                    None
+                })
+                .await
+                {
+                    let covers_dir = data_dir.join("covers");
+                    let _ = tokio::fs::create_dir_all(&covers_dir).await;
+                    let _ = tokio::fs::write(&cache_path, &pic_data).await;
+                    return (
+                        [
+                            (header::CONTENT_TYPE, mime),
+                            (header::CACHE_CONTROL, "public, max-age=86400"),
+                        ],
+                        pic_data,
+                    ).into_response();
                 }
             }
         }

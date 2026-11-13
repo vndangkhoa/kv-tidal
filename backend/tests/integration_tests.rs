@@ -338,6 +338,9 @@ async fn test_stream_local_track_with_force_opus() {
             hires: true,
             dr_score: Some(12),
             is_dsd: false,
+            title_norm: "toughest".to_string(),
+            artist_norm: "ed sheeran".to_string(),
+            album_norm: "-".to_string(),
         });
     }
 
@@ -450,6 +453,74 @@ async fn test_subsonic_endpoints() {
         .unwrap();
     let mut router_clone = router.clone();
     let res = router_clone.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_nas_passcode_gate_and_verify() {
+    use tower_service::Service;
+    let temp = tempfile::tempdir().unwrap();
+    let mut cfg = kv_tidal::config::AppConfig::default();
+    cfg.download_dir = temp.path().to_path_buf();
+    cfg.data_dir = temp.path().to_path_buf();
+    cfg.nas_passcode_enabled = true;
+    cfg.nas_passcode = "4321".to_string();
+
+    let config = std::sync::Arc::new(tokio::sync::RwLock::new(cfg));
+    let trending = kv_tidal::trending::new_trending_store();
+    let library = kv_tidal::storage::scanner::new_library_store();
+    let state = kv_tidal::state::AppState::new(config, trending, library);
+
+    let mut router = kv_tidal::api::fs::router(state.clone()).with_state(state);
+
+    // 1. Unauthenticated browse returns 401
+    let req = axum::http::Request::builder()
+        .uri("/browse")
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = router.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+    // 2. Wrong passcode returns 401
+    let req = axum::http::Request::builder()
+        .uri("/verify")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(r#"{"passcode":"0000"}"#))
+        .unwrap();
+    let res = router.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+    // 3. Correct passcode returns 200 + token + cookie
+    let req = axum::http::Request::builder()
+        .uri("/verify")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(r#"{"passcode":"4321"}"#))
+        .unwrap();
+    let res = router.call(req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+    let set_cookie = res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("kv_nas_auth="));
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let token = json["token"].as_str().unwrap().to_string();
+
+    // 4. Browse with x-nas-token succeeds (200)
+    let req = axum::http::Request::builder()
+        .uri("/browse")
+        .method("GET")
+        .header("x-nas-token", token)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = router.call(req).await.unwrap();
     assert_eq!(res.status(), axum::http::StatusCode::OK);
 }
 

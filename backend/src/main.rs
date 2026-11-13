@@ -6,7 +6,7 @@ pub mod storage;
 pub mod subsonic;
 pub mod trending;
 
-use axum::http::{header, Method};
+use axum::http::Method;
 use axum::Router;
 use config::AppConfig;
 use state::AppState;
@@ -96,7 +96,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 5. Build Shared Application State
-    let app_state = AppState::new(config, trending, library);
+    let app_state = AppState::new(config.clone(), trending, library);
+
+    // Initialize Tidal OAuth refresh token & country code from AppConfig on startup
+    {
+        let (access_tok, refresh_tok, country_code) = {
+            let cfg = config.read().await;
+            (
+                cfg.tidal_access_token.clone(),
+                cfg.tidal_refresh_token.clone(),
+                cfg.tidal_country_code.clone(),
+            )
+        };
+        app_state
+            .tidal
+            .set_oauth_session(access_tok.clone(), refresh_tok.clone(), country_code)
+            .await;
+
+        if access_tok.as_deref().unwrap_or("").trim().is_empty()
+            && refresh_tok.as_deref().map(|r| !r.trim().is_empty()).unwrap_or(false)
+        {
+            let tidal = app_state.tidal.clone();
+            let cfg_store = config.clone();
+            tokio::spawn(async move {
+                if let Ok(_) = tidal.refresh_access_token().await {
+                    if let Some((new_access, new_refresh, new_country)) = tidal.take_dirty_tokens().await {
+                        let mut cfg = cfg_store.write().await;
+                        cfg.tidal_access_token = new_access;
+                        if new_refresh.is_some() {
+                            cfg.tidal_refresh_token = new_refresh;
+                        }
+                        cfg.tidal_country_code = Some(new_country);
+                        let p = cfg.resolve_config_path();
+                        let _ = cfg.save(&p);
+                    }
+                }
+            });
+        }
+    }
 
     // Automatically trigger Soulseek network connection on startup if slskd is active
     {
@@ -104,9 +141,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             let status = soulseek.check_status().await;
-            if status.connected && !status.is_logged_in {
+            if !status.is_logged_in {
                 info!("Triggering automatic Soulseek network connection on startup...");
-                let _ = soulseek.trigger_connect().await;
+                let _ = soulseek.ensure_connected_and_logged_in().await;
             }
         });
     }
@@ -116,16 +153,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_origin(Any)
         .allow_methods([
             Method::GET,
+            Method::HEAD,
             Method::POST,
             Method::PUT,
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+        .allow_headers(Any)
+        .expose_headers(Any);
 
     // 7. Assemble Axum Router
     let app = Router::new()
-        .nest("/api", api::router())
+        .nest("/api", api::router(app_state.clone()))
         .nest("/rest", subsonic::router())
         .fallback_service(ServeDir::new(&web_dir).append_index_html_on_directories(true))
         .layer(cors)

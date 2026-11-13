@@ -323,7 +323,7 @@ export function DsdVaultView() {
                 artist={track.artist}
                 album={track.album}
                 streamId={track.id}
-                source="nas"
+                source="local"
                 hires={true}
                 isDsd={true}
                 format={track.format.toUpperCase()}

@@ -1,3 +1,4 @@
+use crate::api::search_tracker::normalize_diacritics;
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::{Accessor, TagExt};
@@ -29,6 +30,20 @@ pub struct LibraryTrack {
     pub dr_score: Option<u8>,
     #[serde(default)]
     pub is_dsd: bool,
+    #[serde(skip)]
+    pub title_norm: String,
+    #[serde(skip)]
+    pub artist_norm: String,
+    #[serde(skip)]
+    pub album_norm: String,
+}
+
+impl LibraryTrack {
+    pub fn populate_norm(&mut self) {
+        self.title_norm = normalize_diacritics(&self.title);
+        self.artist_norm = normalize_diacritics(&self.artist);
+        self.album_norm = normalize_diacritics(&self.album);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +54,10 @@ pub struct LibraryAlbum {
     pub year: Option<u32>,
     pub track_count: usize,
     pub cover_path: Option<PathBuf>,
+    #[serde(skip)]
+    pub name_norm: String,
+    #[serde(skip)]
+    pub artist_norm: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +66,8 @@ pub struct LibraryArtist {
     pub name: String,
     pub album_count: usize,
     pub track_count: usize,
+    #[serde(skip)]
+    pub name_norm: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -239,7 +260,9 @@ pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<Librar
                     let track = if let Some(cached) = cache.get(&path_str) {
                         if cached.mtime_sec == mtime_sec && cached.size_bytes == size_bytes && mtime_sec > 0 {
                             cache_hits += 1;
-                            Some(cached.track.clone())
+                            let mut t = cached.track.clone();
+                            t.populate_norm();
+                            Some(t)
                         } else {
                             None
                         }
@@ -292,6 +315,8 @@ pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<Librar
     for (key, (name, artist, year, cover_path, track_count)) in album_map {
         let album_id = format!("{:x}", md5::compute(key.as_bytes()));
         *artist_albums.entry(artist.clone()).or_insert(0) += 1;
+        let name_norm = normalize_diacritics(&name);
+        let artist_norm = normalize_diacritics(&artist);
         albums.push(LibraryAlbum {
             id: album_id,
             name,
@@ -299,6 +324,8 @@ pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<Librar
             year,
             track_count,
             cover_path,
+            name_norm,
+            artist_norm,
         });
     }
 
@@ -306,11 +333,13 @@ pub fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<LibraryTrack>, Vec<Librar
     for (name, track_count) in artist_tracks {
         let artist_id = format!("{:x}", md5::compute(name.as_bytes()));
         let album_count = artist_albums.get(&name).copied().unwrap_or(0);
+        let name_norm = normalize_diacritics(&name);
         artists.push(LibraryArtist {
             id: artist_id,
             name,
             album_count,
             track_count,
+            name_norm,
         });
     }
 
@@ -573,7 +602,7 @@ pub fn inspect_audio_file(path: &Path, format: &str) -> Option<LibraryTrack> {
 
     let track_id = format!("{:x}", md5::compute(path.to_string_lossy().as_bytes()));
 
-    Some(LibraryTrack {
+    let mut track = LibraryTrack {
         id: track_id,
         title,
         artist,
@@ -590,5 +619,10 @@ pub fn inspect_audio_file(path: &Path, format: &str) -> Option<LibraryTrack> {
         hires,
         dr_score,
         is_dsd,
-    })
+        title_norm: String::new(),
+        artist_norm: String::new(),
+        album_norm: String::new(),
+    };
+    track.populate_norm();
+    Some(track)
 }

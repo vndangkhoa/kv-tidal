@@ -21,7 +21,13 @@ dist/
 *.spk
 *.apk
 mobile/
-spk/
+spk/*
+!spk/bin/
+spk/bin/*
+!spk/bin/slskd
+!spk/share/
+!spk/share/slskd/
+!spk/share/slskd/**
 
 # Git
 .git/

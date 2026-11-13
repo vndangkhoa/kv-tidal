@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { usePlayer } from "@/context/PlayerContext";
+import { usePlayer, usePlayerProgress } from "@/context/PlayerContext";
 import {
   X,
   Maximize2,
@@ -31,6 +31,7 @@ const CANVAS_W = 500;
 const CANVAS_H = 290;
 
 export function VuMeterModal() {
+  const { progress, duration } = usePlayerProgress();
   const {
     isVuMeterOpen,
     setIsVuMeterOpen,
@@ -38,8 +39,6 @@ export function VuMeterModal() {
     setVuMeterTheme,
     currentTrack,
     isPlaying,
-    progress,
-    duration,
     seek,
     togglePlay,
     playNext,

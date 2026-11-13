@@ -105,12 +105,12 @@ export function AlbumModal({ isOpen, onClose, album }: AlbumModalProps) {
     const queueItems: PlayableTrack[] = tracks.map((t) => {
       const isLocal = t.source === "local";
       return {
-        id: isLocal && t.streamId ? t.streamId : `album-${t.trackId}`,
+        id: t.streamId ? t.streamId : `album-${t.trackId}`,
         title: t.trackName,
         artist: t.artistName,
         album: t.collectionName || album.title,
         coverUrl: album.coverUrl,
-        streamUrl: isLocal && t.streamId
+        streamUrl: t.streamId
           ? `/api/stream?id=${encodeURIComponent(t.streamId)}&artist=${encodeURIComponent(t.artistName)}&title=${encodeURIComponent(t.trackName)}`
           : `/api/stream?artist=${encodeURIComponent(t.artistName)}&title=${encodeURIComponent(t.trackName)}`,
         duration: t.trackTimeMillis ? Math.round(t.trackTimeMillis / 1000) : 210,
@@ -134,12 +134,12 @@ export function AlbumModal({ isOpen, onClose, album }: AlbumModalProps) {
   const handlePlaySingle = (t: RawAlbumTrack) => {
     const isLocal = t.source === "local";
     playTrack({
-      id: isLocal && t.streamId ? t.streamId : `album-${t.trackId}`,
+      id: t.streamId ? t.streamId : `album-${t.trackId}`,
       title: t.trackName,
       artist: t.artistName,
       album: t.collectionName || album.title,
       coverUrl: album.coverUrl,
-      streamUrl: isLocal && t.streamId
+      streamUrl: t.streamId
         ? `/api/stream?id=${encodeURIComponent(t.streamId)}&artist=${encodeURIComponent(t.artistName)}&title=${encodeURIComponent(t.trackName)}`
         : `/api/stream?artist=${encodeURIComponent(t.artistName)}&title=${encodeURIComponent(t.trackName)}`,
       duration: t.trackTimeMillis ? Math.round(t.trackTimeMillis / 1000) : 210,

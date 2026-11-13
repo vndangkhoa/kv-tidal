@@ -87,25 +87,34 @@ export function ArtistModal({
 
   if (!isOpen || !artistName) return null;
 
+  const resolveStreamId = (t: SearchResultItem): string | undefined => {
+    if (t.stream_id) return t.stream_id;
+    if (t.id && (t.id.startsWith("tidal-") || /^\d+$/.test(t.id))) return t.id;
+    return undefined;
+  };
+
   // Convert SearchResultItem into PlayableTrack list
-  const queueItems: PlayableTrack[] = tracks.map((t) => ({
-    id: t.stream_id || `art-${t.artist}-${t.title}`,
-    title: t.title,
-    artist: t.artist,
-    album: t.album,
-    coverUrl: t.cover_url,
-    streamUrl: `/api/stream?artist=${encodeURIComponent(t.artist)}&title=${encodeURIComponent(
-      t.title
-    )}${t.stream_id ? `&id=${encodeURIComponent(t.stream_id)}` : ""}`,
-    duration: t.duration,
-    bitDepth: t.bit_depth || 24,
-    sampleRate: t.sample_rate || 96000,
-    bitrate: t.bitrate || 2850,
-    format: t.format || "FLAC",
-    hires: t.hires,
-    source: t.source || "tidal",
-    drScore: t.dr_score || 12,
-  }));
+  const queueItems: PlayableTrack[] = tracks.map((t) => {
+    const sid = resolveStreamId(t);
+    return {
+      id: sid || `art-${t.artist}-${t.title}`,
+      title: t.title,
+      artist: t.artist,
+      album: t.album,
+      coverUrl: t.cover_url,
+      streamUrl: `/api/stream?artist=${encodeURIComponent(t.artist)}&title=${encodeURIComponent(
+        t.title
+      )}${sid ? `&id=${encodeURIComponent(sid)}` : ""}`,
+      duration: t.duration,
+      bitDepth: t.bit_depth || 24,
+      sampleRate: t.sample_rate || 96000,
+      bitrate: t.bitrate || 2850,
+      format: t.format || "FLAC",
+      hires: t.hires,
+      source: t.source || "tidal",
+      drScore: t.dr_score || 12,
+    };
+  });
 
   // Group into unique albums for Discography tab
   const albumsMap = new Map<
@@ -315,7 +324,7 @@ export function ArtistModal({
                     album={t.album}
                     coverUrl={t.cover_url}
                     previewUrl={t.preview_url}
-                    streamId={t.stream_id}
+                    streamId={resolveStreamId(t)}
                     source={t.source}
                     hires={t.hires}
                     bitDepth={t.bit_depth || 24}

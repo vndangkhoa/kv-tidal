@@ -142,12 +142,23 @@ export default function SearchPage() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoSearchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const suggestAbortRef = useRef<AbortController | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const searchReqIdRef = useRef<number>(0);
+  const lastExecutedSearchRef = useRef<string>("");
+  const isComposingRef = useRef<boolean>(false);
 
-  // Keyboard shortcut (Cmd+K / Ctrl+K or /) to focus search
+  // Auto-focus search input on mount + handle keyboard shortcut (Cmd+K / Ctrl+K or /)
   useEffect(() => {
+    const timer = setTimeout(() => {
+      searchInputRef.current?.focus({ preventScroll: true });
+    }, 30);
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
       const activeTag = document.activeElement?.tagName;
-      if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
+      if (activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "SELECT") return;
 
       if (e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k")) {
         e.preventDefault();
@@ -156,7 +167,12 @@ export default function SearchPage() {
       }
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("keydown", handleKeyDown);
+      suggestAbortRef.current?.abort();
+      searchAbortRef.current?.abort();
+    };
   }, []);
 
   // 1. Load Recent Searches from localStorage on mount
@@ -234,10 +250,11 @@ export default function SearchPage() {
     }
   };
 
-  // 4. Debounced Typeahead Autocomplete fetcher
-  useEffect(() => {
-    const trimmed = query.trim();
+  // 4. Debounced Typeahead Autocomplete fetcher with AbortController & IME guard
+  const fetchSuggestions = useCallback((rawInput: string) => {
+    const trimmed = rawInput.trim();
     if (trimmed.length < 1) {
+      suggestAbortRef.current?.abort();
       setSuggestions([]);
       setShowSuggestions(false);
       return;
@@ -248,25 +265,38 @@ export default function SearchPage() {
     }
 
     debounceTimerRef.current = setTimeout(async () => {
+      if (isComposingRef.current) return;
+      suggestAbortRef.current?.abort();
+      const controller = new AbortController();
+      suggestAbortRef.current = controller;
+
       try {
-        const resp = await fetch(`/api/search/suggestions?q=${encodeURIComponent(trimmed)}`);
-        if (resp.ok) {
+        const resp = await fetch(`/api/search/suggestions?q=${encodeURIComponent(trimmed)}`, {
+          signal: controller.signal,
+        });
+        if (resp.ok && !controller.signal.aborted) {
           const data = await resp.json();
           setSuggestions(data.suggestions || []);
           setShowSuggestions(true);
           setActiveSuggestionIdx(-1);
         }
-      } catch (err) {
-        console.error("Typeahead error:", err);
+      } catch (err: any) {
+        if (err?.name !== "AbortError") {
+          console.error("Typeahead error:", err);
+        }
       }
-    }, 150);
+    }, 160);
+  }, []);
 
+  useEffect(() => {
+    if (isComposingRef.current) return;
+    fetchSuggestions(query);
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [query]);
+  }, [query, fetchSuggestions]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -281,41 +311,122 @@ export default function SearchPage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const executeSearch = async (searchTerm: string, selectedSource = source) => {
-    const trimmed = searchTerm.trim();
-    if (!trimmed) return;
+  const executeSearch = useCallback(
+    async (
+      searchTerm: string,
+      selectedSource = source,
+      syncInput = false,
+      saveHistory = true
+    ) => {
+      const trimmed = searchTerm.trim();
+      if (!trimmed) return;
 
-    setQuery(trimmed);
-    setShowSuggestions(false);
-    setLoading(true);
-    setSearched(true);
-    saveRecentSearch(trimmed);
-
-    try {
-      const resp = await fetch(
-        `/api/search?q=${encodeURIComponent(trimmed)}&source=${selectedSource}`
-      );
-      if (resp.ok) {
-        const data = await resp.json();
-        setResults(data.results || []);
+      if (syncInput) {
+        setQuery(trimmed);
       }
-    } catch (err) {
-      console.error("Search error:", err);
-    } finally {
-      setLoading(false);
+      setShowSuggestions(false);
+      setLoading(true);
+      setSearched(true);
+      lastExecutedSearchRef.current = `${selectedSource}:${trimmed.toLowerCase()}`;
+      if (saveHistory) {
+        saveRecentSearch(trimmed);
+      }
+
+      searchAbortRef.current?.abort();
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+      const reqId = ++searchReqIdRef.current;
+
+      try {
+        const resp = await fetch(
+          `/api/search?q=${encodeURIComponent(trimmed)}&source=${selectedSource}`,
+          { signal: controller.signal }
+        );
+        if (resp.ok && reqId === searchReqIdRef.current) {
+          const data = await resp.json();
+          setResults(data.results || []);
+        }
+      } catch (err: any) {
+        if (err?.name !== "AbortError") {
+          console.error("Search error:", err);
+        }
+      } finally {
+        if (reqId === searchReqIdRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [source, saveRecentSearch]
+  );
+
+  // Pick up initial query from Header quick-search or ?q= URL parameter
+  useEffect(() => {
+    let initialQ = "";
+    try {
+      const pending = sessionStorage.getItem("kvtidal_pending_search");
+      if (pending) {
+        initialQ = pending;
+        sessionStorage.removeItem("kvtidal_pending_search");
+      }
+    } catch {}
+
+    if (!initialQ && typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      initialQ = params.get("q") || "";
     }
-  };
+
+    if (initialQ.trim()) {
+      setQuery(initialQ.trim());
+      executeSearch(initialQ.trim(), source, true, true);
+    }
+    // Run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Live auto-debounced search while typing (once >=2 chars & not composing IME)
+  useEffect(() => {
+    const trimmed = query.trim();
+    const lower = trimmed.toLowerCase();
+    const looksLikeUrl =
+      lower.startsWith("http://") ||
+      lower.startsWith("https://") ||
+      lower.includes("tidal.com") ||
+      lower.includes("qobuz.com") ||
+      lower.includes("spotify.com");
+
+    if (trimmed.length < 2 || looksLikeUrl || isComposingRef.current) {
+      if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current);
+      return;
+    }
+
+    const sig = `${source}:${lower}`;
+    if (lastExecutedSearchRef.current === sig) return;
+
+    if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current);
+    autoSearchTimerRef.current = setTimeout(() => {
+      if (isComposingRef.current) return;
+      executeSearch(query, source, false, false);
+    }, 400);
+
+    return () => {
+      if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current);
+    };
+  }, [query, source, executeSearch]);
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current);
     if (activeSuggestionIdx >= 0 && suggestions[activeSuggestionIdx]) {
       selectSuggestion(suggestions[activeSuggestionIdx]);
     } else {
-      executeSearch(query);
+      executeSearch(query, source, false, true);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) {
+      return;
+    }
     if (!showSuggestions || suggestions.length === 0) return;
 
     if (e.key === "ArrowDown") {
@@ -337,12 +448,19 @@ export default function SearchPage() {
   };
 
   const selectSuggestion = (suggestion: SearchSuggestion) => {
-    executeSearch(suggestion.text);
+    if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current);
+    executeSearch(suggestion.text, source, true, true);
   };
 
   const handleClear = () => {
+    if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current);
+    suggestAbortRef.current?.abort();
+    searchAbortRef.current?.abort();
+    searchReqIdRef.current++;
+    lastExecutedSearchRef.current = "";
     setQuery("");
     setResults([]);
+    setLoading(false);
     setSearched(false);
     setShowSuggestions(false);
     searchInputRef.current?.focus();
@@ -396,7 +514,7 @@ export default function SearchPage() {
   }, [filteredResults, sortBy]);
 
   // Transform SearchResultItem into PlayableTrack
-  const toPlayableTrack = (item: SearchResultItem): PlayableTrack => {
+  const toPlayableTrack = useCallback((item: SearchResultItem): PlayableTrack => {
     let streamUrl = `/api/stream?artist=${encodeURIComponent(item.artist)}&title=${encodeURIComponent(
       item.title
     )}`;
@@ -418,7 +536,28 @@ export default function SearchPage() {
       source: item.source,
       drScore: item.dr_score || (item.hires ? 13 : 11),
     };
-  };
+  }, []);
+
+  const searchQueue = useMemo(
+    () => sortedResults.map(toPlayableTrack),
+    [sortedResults, toPlayableTrack]
+  );
+
+  const handleArtistClick = useCallback((artName: string, coverUrl?: string) => {
+    setSelectedArtist({ name: artName, coverUrl });
+  }, []);
+
+  const handleAlbumClick = useCallback(
+    (albName: string, artName: string, covUrl?: string, trackId?: string) => {
+      setSelectedAlbum({
+        id: trackId || `${artName}-${albName}`,
+        title: albName,
+        artist: artName,
+        coverUrl: covUrl,
+      });
+    },
+    []
+  );
 
   const handlePlaySingle = (item: SearchResultItem, contextList: SearchResultItem[]) => {
     const track = toPlayableTrack(item);
@@ -451,6 +590,14 @@ export default function SearchPage() {
               ref={searchInputRef}
               type="text"
               value={query}
+              autoFocus
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={(e) => {
+                isComposingRef.current = false;
+                fetchSuggestions((e.target as HTMLInputElement).value);
+              }}
               onChange={(e) => setQuery(e.target.value)}
               onFocus={() => {
                 if (suggestions.length > 0) setShowSuggestions(true);
@@ -483,7 +630,6 @@ export default function SearchPage() {
             {/* Search Submit Button */}
             <button
               type="submit"
-              disabled={loading}
               className="absolute right-1.5 sm:right-2 px-3.5 sm:px-4 py-1.5 bg-primary text-black font-bold rounded-full text-xs hover:brightness-110 active:scale-95 transition-all flex items-center space-x-1.5 shadow-md cursor-pointer"
             >
               {loading ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin" /> : <span>Search</span>}
@@ -515,8 +661,8 @@ export default function SearchPage() {
                 type="button"
                 onClick={() => {
                   setSource(s);
-                  if (searched && query.trim()) {
-                    executeSearch(query, s);
+                  if (query.trim()) {
+                    executeSearch(query, s, false, false);
                   }
                 }}
                 className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap ${
@@ -641,8 +787,8 @@ export default function SearchPage() {
         )}
       </div>
 
-      {/* CONDITIONAL CONTENT: Loading Skeleton OR Search Results OR Rich Zero-State Discovery */}
-      {loading ? (
+      {/* CONDITIONAL CONTENT: Initial Skeleton OR Search Results OR Rich Zero-State Discovery */}
+      {loading && results.length === 0 ? (
         <div className="space-y-4">
           <div className="flex items-center space-x-2 text-sm text-textSecondary mb-2">
             <Loader2 className="w-4 h-4 animate-spin text-primary" />
@@ -669,6 +815,12 @@ export default function SearchPage() {
               <span className="text-xs px-2 py-0.5 rounded-full bg-surface border border-border text-textSecondary font-mono">
                 {sortedResults.length} tracks
               </span>
+              {loading && (
+                <span className="inline-flex items-center space-x-1 text-[11px] text-primary font-mono ml-1">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Updating...</span>
+                </span>
+              )}
             </div>
             <button
               onClick={handleClear}
@@ -786,41 +938,28 @@ export default function SearchPage() {
                   <span>Track Catalog</span>
                   <span>Audio Specs</span>
                 </div>
-                {(() => {
-                  const searchQueue: PlayableTrack[] = sortedResults.map(toPlayableTrack);
-
-                  return sortedResults.map((item) => (
-                    <TrackRow
-                      key={item.id}
-                      title={item.title}
-                      artist={item.artist}
-                      album={item.album}
-                      coverUrl={item.cover_url}
-                      previewUrl={item.preview_url}
-                      duration={item.duration}
-                      source={item.source}
-                      hires={item.hires}
-                      streamId={item.stream_id}
-                      bitDepth={item.bit_depth || (item.hires ? 24 : 16)}
-                      sampleRate={item.sample_rate || (item.hires ? 96000 : 44100)}
-                      bitrate={item.bitrate || 2800}
-                      format={item.format || (item.hires ? "FLAC" : "MP3")}
-                      drScore={item.dr_score || (item.hires ? 13 : 11)}
-                      queueContext={searchQueue}
-                      onArtistClick={(artName) =>
-                        setSelectedArtist({ name: artName, coverUrl: item.cover_url })
-                      }
-                      onAlbumClick={(albName, artName, covUrl) =>
-                        setSelectedAlbum({
-                          id: item.id,
-                          title: albName,
-                          artist: artName,
-                          coverUrl: covUrl,
-                        })
-                      }
-                    />
-                  ));
-                })()}
+                {sortedResults.map((item) => (
+                  <TrackRow
+                    key={item.id}
+                    title={item.title}
+                    artist={item.artist}
+                    album={item.album}
+                    coverUrl={item.cover_url}
+                    previewUrl={item.preview_url}
+                    duration={item.duration}
+                    source={item.source}
+                    hires={item.hires}
+                    streamId={item.stream_id}
+                    bitDepth={item.bit_depth || (item.hires ? 24 : 16)}
+                    sampleRate={item.sample_rate || (item.hires ? 96000 : 44100)}
+                    bitrate={item.bitrate || 2800}
+                    format={item.format || (item.hires ? "FLAC" : "MP3")}
+                    drScore={item.dr_score || (item.hires ? 13 : 11)}
+                    queueContext={searchQueue}
+                    onArtistClick={handleArtistClick}
+                    onAlbumClick={handleAlbumClick}
+                  />
+                ))}
               </div>
             </div>
           ) : (
@@ -973,7 +1112,7 @@ export default function SearchPage() {
                 return (
                   <div
                     key={bm.title}
-                    onClick={() => executeSearch(bm.query)}
+                    onClick={() => executeSearch(bm.query, source, true, true)}
                     className={`group relative p-4 rounded-xl bg-gradient-to-br ${bm.bgGradient} border border-border ${bm.borderColor} transition-all duration-200 cursor-pointer shadow-md hover:shadow-xl hover:-translate-y-0.5 flex flex-col justify-between`}
                   >
                     <div>
@@ -1020,7 +1159,7 @@ export default function SearchPage() {
                 {trendingData.genres.map((genre) => (
                   <button
                     key={genre}
-                    onClick={() => executeSearch(genre)}
+                    onClick={() => executeSearch(genre, source, true, true)}
                     className="px-3.5 py-1.5 rounded-full bg-card hover:bg-cardHover border border-border hover:border-primary/40 text-xs font-medium text-textSecondary hover:text-white transition-all cursor-pointer shadow-sm flex items-center space-x-1.5"
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-primary/70" />
@@ -1055,7 +1194,7 @@ export default function SearchPage() {
                   {recentSearches.map((item) => (
                     <button
                       key={item.query}
-                      onClick={() => executeSearch(item.query)}
+                      onClick={() => executeSearch(item.query, source, true, true)}
                       className="group px-3 py-1.5 rounded-full bg-card hover:bg-cardHover border border-border hover:border-primary/40 text-xs text-textPrimary flex items-center space-x-2 transition-all cursor-pointer shadow-sm"
                     >
                       <Clock className="w-3 h-3 text-textSecondary/60" />
@@ -1086,7 +1225,7 @@ export default function SearchPage() {
                   {trendingData.trending_keywords.map((kw) => (
                     <button
                       key={kw}
-                      onClick={() => executeSearch(kw)}
+                      onClick={() => executeSearch(kw, source, true, true)}
                       className="px-3 py-1.5 rounded-full bg-surface hover:bg-card border border-border text-xs text-textSecondary hover:text-white transition-colors cursor-pointer flex items-center space-x-1.5 shadow-sm"
                     >
                       <Flame className="w-3 h-3 text-amber-400" />

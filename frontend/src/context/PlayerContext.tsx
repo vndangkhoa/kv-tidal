@@ -7,6 +7,8 @@ import React, {
   useRef,
   useState,
   useCallback,
+  useMemo,
+  useSyncExternalStore,
 } from "react";
 import {
   PlayableTrack,
@@ -200,12 +202,15 @@ export const AUTO_EQ_PRESETS: AutoEqPreset[] = [
 ];
 
 export function searchResultToPlayableTrack(item: SearchResultItem): PlayableTrack {
+  const effectiveStreamId =
+    item.stream_id ||
+    (item.id && (item.id.startsWith("tidal-") || /^\d+$/.test(item.id)) ? item.id : undefined);
   let streamUrl = `/api/stream?artist=${encodeURIComponent(item.artist)}&title=${encodeURIComponent(item.title)}`;
-  if (item.stream_id) {
-    streamUrl += `&id=${encodeURIComponent(item.stream_id)}`;
+  if (effectiveStreamId) {
+    streamUrl += `&id=${encodeURIComponent(effectiveStreamId)}`;
   }
   return {
-    id: item.stream_id || `${item.artist}-${item.title}`,
+    id: effectiveStreamId || `${item.artist}-${item.title}`,
     title: item.title,
     artist: item.artist,
     album: item.album,
@@ -305,16 +310,79 @@ interface PlayerContextType {
   switchStreamQuality: (newQuality: "flac" | "opus") => Promise<void>;
   autoUpgradeToFlac: boolean;
   setAutoUpgradeToFlac: (enabled: boolean) => void;
+  gaplessEnabled: boolean;
+  setGaplessEnabled: (enabled: boolean) => void;
+  crossfadeSeconds: number;
+  setCrossfadeSeconds: (seconds: number) => void;
+  isNextTrackPrebuffered: boolean;
+  playbackError: string | null;
+  clearPlaybackError: () => void;
 }
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
 
+interface PlayerProgressContextType {
+  subscribe: (listener: () => void) => () => void;
+  getSnapshot: () => number;
+  getServerSnapshot: () => number;
+  duration: number;
+}
+
+const PlayerProgressContext = createContext<PlayerProgressContextType>({
+  subscribe: () => () => {},
+  getSnapshot: () => 0,
+  getServerSnapshot: () => 0,
+  duration: 0,
+});
+
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [currentTrack, setCurrentTrack] = useState<PlayableTrack | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [progress, setProgress] = useState<number>(0);
+  const progressRef = useRef<number>(0);
+  const progressListenersRef = useRef<Set<() => void>>(new Set());
+  const setProgress = useCallback((val: number) => {
+    progressRef.current = val;
+    progressListenersRef.current.forEach((listener) => listener());
+  }, []);
+  const subscribeProgress = useCallback((listener: () => void) => {
+    progressListenersRef.current.add(listener);
+    return () => {
+      progressListenersRef.current.delete(listener);
+    };
+  }, []);
+  const getProgressSnapshot = useCallback(() => progressRef.current, []);
+  const getServerProgressSnapshot = useCallback(() => 0, []);
+  const lastProgressUpdateRef = useRef<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [volume, setVolumeState] = useState<number>(0.85);
+  const [playbackError, setPlaybackErrorState] = useState<string | null>(null);
+  const playbackErrorRef = useRef<string | null>(null);
+  const playbackErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearPlaybackError = useCallback(() => {
+    if (playbackErrorTimerRef.current) {
+      clearTimeout(playbackErrorTimerRef.current);
+      playbackErrorTimerRef.current = null;
+    }
+    playbackErrorRef.current = null;
+    setPlaybackErrorState(null);
+  }, []);
+
+  const setPlaybackError = useCallback((msg: string | null) => {
+    if (playbackErrorTimerRef.current) {
+      clearTimeout(playbackErrorTimerRef.current);
+      playbackErrorTimerRef.current = null;
+    }
+    playbackErrorRef.current = msg;
+    setPlaybackErrorState(msg);
+    if (msg) {
+      playbackErrorTimerRef.current = setTimeout(() => {
+        playbackErrorRef.current = null;
+        setPlaybackErrorState(null);
+        playbackErrorTimerRef.current = null;
+      }, 7000);
+    }
+  }, []);
 
   // Audio stream quality mode: "flac" (Bit-Perfect Lossless) vs "opus" (Fast Web Stream 160kbps)
   const [streamQuality, setStreamQualityState] = useState<"flac" | "opus">("opus");
@@ -353,6 +421,58 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setAutoUpgradeToFlacState(enabled);
     try {
       localStorage.setItem("kv_auto_upgrade_flac", enabled ? "true" : "false");
+    } catch (_) {}
+  }, []);
+
+  // Gapless & Crossfade Engine State
+  const [gaplessEnabled, setGaplessEnabledState] = useState<boolean>(true);
+  const [crossfadeSeconds, setCrossfadeSecondsState] = useState<number>(0);
+  const [isNextTrackPrebuffered, setIsNextTrackPrebuffered] = useState<boolean>(false);
+
+  const gaplessEnabledRef = useRef<boolean>(gaplessEnabled);
+  gaplessEnabledRef.current = gaplessEnabled;
+  const crossfadeSecondsRef = useRef<number>(crossfadeSeconds);
+  crossfadeSecondsRef.current = crossfadeSeconds;
+  const streamQualityRef = useRef<"flac" | "opus">(streamQuality);
+  streamQualityRef.current = streamQuality;
+
+  useEffect(() => {
+    try {
+      const savedGapless = localStorage.getItem("kv_gapless_enabled");
+      if (savedGapless !== null) {
+        setGaplessEnabledState(savedGapless !== "false");
+      }
+      const savedCrossfade = localStorage.getItem("kv_crossfade_seconds");
+      if (savedCrossfade !== null) {
+        const parsed = parseFloat(savedCrossfade);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 12) {
+          setCrossfadeSecondsState(parsed);
+        }
+      }
+    } catch (_) {}
+  }, []);
+
+  const setGaplessEnabled = useCallback((enabled: boolean) => {
+    setGaplessEnabledState(enabled);
+    gaplessEnabledRef.current = enabled;
+    try {
+      localStorage.setItem("kv_gapless_enabled", enabled ? "true" : "false");
+    } catch (_) {}
+  }, []);
+
+  const setCrossfadeSeconds = useCallback((seconds: number) => {
+    const clamped = Math.max(0, Math.min(12, Math.round(seconds * 2) / 2));
+    setCrossfadeSecondsState(clamped);
+    crossfadeSecondsRef.current = clamped;
+    if (clamped > 0 && !gaplessEnabledRef.current) {
+      setGaplessEnabledState(true);
+      gaplessEnabledRef.current = true;
+      try {
+        localStorage.setItem("kv_gapless_enabled", "true");
+      } catch (_) {}
+    }
+    try {
+      localStorage.setItem("kv_crossfade_seconds", String(clamped));
     } catch (_) {}
   }, []);
 
@@ -471,11 +591,40 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Audio Node references
+  // Dual-Deck Audio Node references (Deck A + Deck B for 0ms Gapless & Crossfade)
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const preBufferAudioRef = useRef<HTMLAudioElement | null>(null);
+  const decksRef = useRef<[HTMLAudioElement | null, HTMLAudioElement | null]>([null, null]);
+  const activeDeckIdxRef = useRef<0 | 1>(0);
+  const deckSourcesRef = useRef<[MediaElementAudioSourceNode | null, MediaElementAudioSourceNode | null]>([
+    null,
+    null,
+  ]);
+  const deckGainsRef = useRef<[GainNode | null, GainNode | null]>([null, null]);
+  const mixBusNodeRef = useRef<GainNode | null>(null);
+  const standbyPreparedUrlRef = useRef<string>("");
+  const standbyPreparedTrackIdRef = useRef<string>("");
+  const warmedStreamUrlRef = useRef<string>("");
+  const prefetchedHeadersRef = useRef<
+    Map<
+      string,
+      {
+        source?: string | null;
+        format?: string | null;
+        bitDepth?: number;
+        sampleRate?: number;
+        bitrate?: number;
+        hires?: boolean;
+        fileName?: string | null;
+        filePath?: string | null;
+      }
+    >
+  >(new Map());
+  const autoAdvanceTriggeredRef = useRef<boolean>(false);
+  const crossfadeCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const audioContextRef = useRef<AudioContext | null>(null);
-  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const sourceNodeRef = useRef<AudioNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const splitterNodeRef = useRef<ChannelSplitterNode | null>(null);
   const analyserLeftRef = useRef<AnalyserNode | null>(null);
@@ -486,16 +635,148 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const eqFiltersRef = useRef<BiquadFilterNode[]>([]);
   const isAudioGraphReady = useRef<boolean>(false);
 
-  // Ref to track current index for event listeners without stale closures
+  // Ref to track current index & track for event listeners without stale closures
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
   const queueRef = useRef(queue);
   queueRef.current = queue;
+  const currentTrackRef = useRef<PlayableTrack | null>(currentTrack);
+  currentTrackRef.current = currentTrack;
+
+  const buildCanonicalStreamUrl = useCallback(
+    (track: PlayableTrack, quality: "flac" | "opus"): string => {
+      if (!track.streamUrl) return "";
+      let finalStreamUrl = track.streamUrl;
+      const isLocalTrack =
+        track.source === "local" ||
+        track.source === "nas" ||
+        track.id.startsWith("/") ||
+        track.id.startsWith("local-");
+      if (typeof window !== "undefined") {
+        try {
+          const urlObj = new URL(finalStreamUrl, window.location.origin);
+          if (urlObj.pathname.includes("/api/stream") && !isLocalTrack) {
+            urlObj.searchParams.set("format", quality);
+            finalStreamUrl = urlObj.pathname + urlObj.search;
+          }
+        } catch (_) {}
+      }
+      return finalStreamUrl;
+    },
+    []
+  );
+
+  const getNextUpcomingCandidate = useCallback((): {
+    track: PlayableTrack;
+    fromSuggested: boolean;
+  } | null => {
+    const q = queueRef.current;
+    const nextIdx = currentIndexRef.current + 1;
+    if (nextIdx >= 0 && nextIdx < q.length) {
+      return { track: q[nextIdx], fromSuggested: false };
+    }
+    if (autoplayRef.current && suggestedTracksRef.current.length > 0) {
+      const curId = currentTrackRef.current?.id;
+      const candidate =
+        suggestedTracksRef.current.find((t) => t.id !== curId) ||
+        suggestedTracksRef.current[0];
+      if (candidate) {
+        return { track: candidate, fromSuggested: true };
+      }
+    }
+    return null;
+  }, []);
+
+  // Warm up backend stream resolver via HEAD and pre-buffer standby audio deck
+  const prepareStandbyDeck = useCallback(
+    (forceLoadStandby: boolean = false) => {
+      if (!gaplessEnabledRef.current && crossfadeSecondsRef.current <= 0) {
+        return;
+      }
+      const nextCand = getNextUpcomingCandidate();
+      if (!nextCand || !nextCand.track.streamUrl) {
+        return;
+      }
+      const nextTrack = nextCand.track;
+      const isLocalTrack =
+        nextTrack.source === "local" ||
+        nextTrack.source === "nas" ||
+        nextTrack.id.startsWith("/") ||
+        nextTrack.id.startsWith("local-");
+      const effectiveQuality = isLocalTrack ? "flac" : streamQualityRef.current;
+      const nextUrl = buildCanonicalStreamUrl(nextTrack, effectiveQuality);
+      if (!nextUrl) return;
+
+      // 1. Warm up backend StreamResolver cache (and prefetch audio telemetry headers)
+      if (warmedStreamUrlRef.current !== nextUrl) {
+        warmedStreamUrlRef.current = nextUrl;
+        fetch(nextUrl, { method: "HEAD" })
+          .then((res) => {
+            if (!res.ok) return;
+            const liveSource = res.headers.get("x-audio-source");
+            const liveFormat = res.headers.get("x-audio-format");
+            const liveBitDepth = res.headers.get("x-audio-bit-depth");
+            const liveSampleRate = res.headers.get("x-audio-sample-rate");
+            const liveBitrate = res.headers.get("x-audio-bitrate");
+            const liveIsLossless = res.headers.get("x-audio-is-lossless");
+            const liveFileName = res.headers.get("x-audio-file-name");
+            const liveFilePath = res.headers.get("x-audio-file-path");
+            prefetchedHeadersRef.current.set(nextUrl, {
+              source: liveSource,
+              format: liveFormat,
+              bitDepth: liveBitDepth ? parseInt(liveBitDepth, 10) : undefined,
+              sampleRate: liveSampleRate ? parseInt(liveSampleRate, 10) : undefined,
+              bitrate: liveBitrate ? parseInt(liveBitrate, 10) : undefined,
+              hires: liveIsLossless !== null ? liveIsLossless === "true" : undefined,
+              fileName: liveFileName,
+              filePath: liveFilePath,
+            });
+
+            // Once backend stream URL is warmed up in cache, prime the standby deck if not currently crossfading
+            const standby = preBufferAudioRef.current;
+            if (
+              standby &&
+              !crossfadeCleanupTimerRef.current &&
+              standbyPreparedUrlRef.current !== nextUrl
+            ) {
+              standbyPreparedUrlRef.current = nextUrl;
+              standbyPreparedTrackIdRef.current = nextTrack.id;
+              setIsNextTrackPrebuffered(false);
+              standby.preload = "auto";
+              standby.src = nextUrl;
+              standby.load();
+            }
+          })
+          .catch(() => {});
+      }
+
+      // 2. Also load directly into standby deck when within pre-buffer window
+      if (forceLoadStandby) {
+        const standby = preBufferAudioRef.current;
+        if (
+          standby &&
+          !crossfadeCleanupTimerRef.current &&
+          standbyPreparedUrlRef.current !== nextUrl
+        ) {
+          standbyPreparedUrlRef.current = nextUrl;
+          standbyPreparedTrackIdRef.current = nextTrack.id;
+          setIsNextTrackPrebuffered(false);
+          standby.preload = "auto";
+          standby.src = nextUrl;
+          standby.load();
+        }
+      }
+    },
+    [buildCanonicalStreamUrl, getNextUpcomingCandidate]
+  );
+
+  const prepareStandbyDeckRef = useRef(prepareStandbyDeck);
+  prepareStandbyDeckRef.current = prepareStandbyDeck;
 
   // Re-wire audio graph when Bit-Perfect mode is toggled
   const reconnectGraph = (isBitPerfect: boolean) => {
     const ctx = audioContextRef.current;
-    const source = sourceNodeRef.current;
+    const source = mixBusNodeRef.current || sourceNodeRef.current;
     const analyser = analyserRef.current;
     const gain = gainNodeRef.current;
     const preamp = preampGainNodeRef.current;
@@ -529,12 +810,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (isBitPerfect || filters.length === 0) {
-        // Pure Direct Bit-Perfect Passthrough: Source -> Gain (at 100% bit-transparent) -> Analyser -> Destination
+        // Pure Direct Bit-Perfect Passthrough: MixBus -> Gain (at 100% bit-transparent) -> Analyser -> Destination
         source.connect(gain);
         gain.connect(analyser);
         analyser.connect(ctx.destination);
       } else {
-        // DSP PEQ Mode with Auto-Headroom: Source -> Pre-Amp Headroom -> Filter 0..N -> Stereo Panner -> Gain -> Analyser -> Destination
+        // DSP PEQ Mode with Auto-Headroom: MixBus -> Pre-Amp Headroom -> Filter 0..N -> Stereo Panner -> Gain -> Analyser -> Destination
         let headNode: AudioNode = source;
         if (preamp) {
           source.connect(preamp);
@@ -574,7 +855,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Initialize Web Audio Graph lazily on user interaction
+  // Initialize Dual-Deck Web Audio Graph lazily on user interaction
   const initAudioGraph = useCallback(() => {
     if (isAudioGraphReady.current || !audioRef.current) return;
 
@@ -587,9 +868,33 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const ctx = new AudioCtx({ latencyHint: "playback" });
       audioContextRef.current = ctx;
 
-      // Source node from HTML5 Audio
-      const source = ctx.createMediaElementSource(audioRef.current);
-      sourceNodeRef.current = source;
+      const mixBus = ctx.createGain();
+      mixBus.gain.value = 1.0;
+      mixBusNodeRef.current = mixBus;
+      sourceNodeRef.current = mixBus;
+
+      // Wire both Deck A and Deck B into the shared mixBus with per-deck crossfade/gapless GainNodes
+      const d0 = decksRef.current[0] || audioRef.current;
+      const d1 = decksRef.current[1] || preBufferAudioRef.current;
+
+      if (d0) {
+        const s0 = ctx.createMediaElementSource(d0);
+        const g0 = ctx.createGain();
+        g0.gain.value = activeDeckIdxRef.current === 0 ? 1.0 : 0.0001;
+        s0.connect(g0);
+        g0.connect(mixBus);
+        deckSourcesRef.current[0] = s0;
+        deckGainsRef.current[0] = g0;
+      }
+      if (d1 && d1 !== d0) {
+        const s1 = ctx.createMediaElementSource(d1);
+        const g1 = ctx.createGain();
+        g1.gain.value = activeDeckIdxRef.current === 1 ? 1.0 : 0.0001;
+        s1.connect(g1);
+        g1.connect(mixBus);
+        deckSourcesRef.current[1] = s1;
+        deckGainsRef.current[1] = g1;
+      }
 
       // Analyser node for 60fps spectrum & peak VU
       const analyser = ctx.createAnalyser();
@@ -707,31 +1012,46 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [currentTrack]
   );
 
-  // Play Track with auto-queue and pre-buffering
+  // Play Track with Dual-Deck 0ms Gapless Swap & Smooth Crossfade
   const playTrack = useCallback(
-    (track: PlayableTrack, newQueue?: PlayableTrack[]) => {
+    (
+      track: PlayableTrack,
+      newQueue?: PlayableTrack[],
+      options?: { fromAutoAdvance?: boolean }
+    ) => {
       if (!audioRef.current) return;
+      clearPlaybackError();
       initAudioGraph();
+      autoAdvanceTriggeredRef.current = false;
 
       if (audioContextRef.current && audioContextRef.current.state === "suspended") {
         audioContextRef.current.resume().catch(() => {});
       }
 
       setCurrentTrack(track);
+      currentTrackRef.current = track;
 
       if (newQueue) {
         setQueue(newQueue);
+        queueRef.current = newQueue;
         const idx = newQueue.findIndex((t) => t.id === track.id);
-        setCurrentIndex(idx !== -1 ? idx : 0);
+        const resolvedIdx = idx !== -1 ? idx : 0;
+        setCurrentIndex(resolvedIdx);
+        currentIndexRef.current = resolvedIdx;
       } else {
         setQueue((prev) => {
           const existingIdx = prev.findIndex((t) => t.id === track.id);
           if (existingIdx !== -1) {
             setCurrentIndex(existingIdx);
+            currentIndexRef.current = existingIdx;
+            queueRef.current = prev;
             return prev;
           } else {
             const updated = [...prev, track];
-            setCurrentIndex(updated.length - 1);
+            const newIdx = updated.length - 1;
+            setCurrentIndex(newIdx);
+            currentIndexRef.current = newIdx;
+            queueRef.current = updated;
             return updated;
           }
         });
@@ -751,93 +1071,273 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }).catch(() => {});
       }
 
-      // Play in browser
+      // Play in browser using Dual-Deck engine
       if (track.streamUrl) {
-        let finalStreamUrl = track.streamUrl;
-        const isLocalTrack = track.source === "local" || track.id.startsWith("/");
+        const isLocalTrack =
+          track.source === "local" ||
+          track.source === "nas" ||
+          track.id.startsWith("/") ||
+          track.id.startsWith("local-");
         if (isLocalTrack) {
           setStreamQualityState("flac");
+          streamQualityRef.current = "flac";
         }
+        const effectiveQuality = isLocalTrack ? "flac" : streamQualityRef.current;
+        const finalStreamUrl = buildCanonicalStreamUrl(track, effectiveQuality);
 
-        try {
-          const urlObj = new URL(finalStreamUrl, window.location.origin);
-          if (urlObj.pathname.includes("/api/stream") && !isLocalTrack) {
-            urlObj.searchParams.set("format", streamQuality);
-            finalStreamUrl = urlObj.pathname + urlObj.search;
-          }
-        } catch (_) {}
-
-        if (audioRef.current.src !== finalStreamUrl) {
-          audioRef.current.src = finalStreamUrl;
-        }
-
-        // Micro-fade in on start (prevents planar headphone transducer click)
         const ctx = audioContextRef.current;
-        const gainNode = gainNodeRef.current;
-        if (ctx && gainNode) {
-          const targetVol = bitPerfectMode && isVolumeLocked ? 1.0 : volume;
+        const masterGain = gainNodeRef.current;
+        const targetVol = bitPerfectMode && isVolumeLocked ? 1.0 : volume;
+        if (ctx && masterGain) {
           try {
-            gainNode.gain.cancelScheduledValues(ctx.currentTime);
-            gainNode.gain.setValueAtTime(gainNode.gain.value || 0, ctx.currentTime);
-            gainNode.gain.linearRampToValueAtTime(targetVol, ctx.currentTime + 0.012);
+            masterGain.gain.cancelScheduledValues(ctx.currentTime);
+            masterGain.gain.setValueAtTime(targetVol, ctx.currentTime);
           } catch (_) {
-            gainNode.gain.value = targetVol;
+            masterGain.gain.value = targetVol;
           }
         }
 
-        audioRef.current
-          .play()
-          .then(() => {
-            setIsPlaying(true);
-          })
-          .catch((err) => {
-            console.warn("Autoplay blocked or stream error:", err);
-          });
+        const curDeckIdx = activeDeckIdxRef.current;
+        const standbyDeckIdx: 0 | 1 = curDeckIdx === 0 ? 1 : 0;
+        const activeDeck = decksRef.current[curDeckIdx] || audioRef.current;
+        const standbyDeck = decksRef.current[standbyDeckIdx] || preBufferAudioRef.current;
 
-        // Asynchronously probe stream headers for 100% transparent audio badges
-        fetch(finalStreamUrl, { method: "HEAD" })
-          .then((res) => {
-            const liveSource = res.headers.get("x-audio-source");
-            const liveFormat = res.headers.get("x-audio-format");
-            const liveBitDepth = res.headers.get("x-audio-bit-depth");
-            const liveSampleRate = res.headers.get("x-audio-sample-rate");
-            const liveBitrate = res.headers.get("x-audio-bitrate");
-            const liveIsLossless = res.headers.get("x-audio-is-lossless");
-            const liveFileName = res.headers.get("x-audio-file-name");
-            const liveFilePath = res.headers.get("x-audio-file-path");
+        const canUseStandbyDeck =
+          !!standbyDeck &&
+          standbyDeck !== activeDeck &&
+          ((standbyPreparedUrlRef.current === finalStreamUrl &&
+            standbyDeck.readyState >= 1) ||
+            (options?.fromAutoAdvance && crossfadeSecondsRef.current > 0));
 
-            if (liveSource || liveFormat || liveFileName) {
-              setCurrentTrack((prev) => {
-                if (!prev || prev.id !== track.id) return prev;
-                return {
-                  ...prev,
-                  streamUrl: finalStreamUrl,
-                  source: liveSource || prev.source,
-                  format: liveFormat || prev.format,
-                  bitDepth: liveBitDepth ? parseInt(liveBitDepth, 10) : prev.bitDepth,
-                  sampleRate: liveSampleRate ? parseInt(liveSampleRate, 10) : prev.sampleRate,
-                  bitrate: liveBitrate ? parseInt(liveBitrate, 10) : prev.bitrate,
-                  hires: liveIsLossless !== null ? liveIsLossless === "true" : prev.hires,
-                  fileName: liveFileName || prev.fileName,
-                  filePath: liveFilePath || prev.filePath,
-                };
-              });
+        if (canUseStandbyDeck && standbyDeck) {
+          // Cancel any previous crossfade cleanup timer
+          if (crossfadeCleanupTimerRef.current) {
+            clearTimeout(crossfadeCleanupTimerRef.current);
+            crossfadeCleanupTimerRef.current = null;
+          }
+
+          // Ensure standbyDeck has the exact stream URL
+          if (standbyPreparedUrlRef.current !== finalStreamUrl) {
+            standbyDeck.src = finalStreamUrl;
+          }
+
+          // Swap Active <-> Standby Decks for 0ms Gapless / Smooth Crossfade
+          activeDeckIdxRef.current = standbyDeckIdx;
+          audioRef.current = standbyDeck;
+          preBufferAudioRef.current = activeDeck;
+          standbyPreparedUrlRef.current = "";
+          standbyPreparedTrackIdRef.current = "";
+          setIsNextTrackPrebuffered(false);
+
+          const incomingGain = deckGainsRef.current[standbyDeckIdx];
+          const outgoingGain = deckGainsRef.current[curDeckIdx];
+          const wasOutgoingPlaying = !activeDeck.paused;
+          const xfadeSec =
+            wasOutgoingPlaying && crossfadeSecondsRef.current > 0
+              ? crossfadeSecondsRef.current
+              : wasOutgoingPlaying
+              ? options?.fromAutoAdvance
+                ? 0.035 // 35ms seamless butt-splice on gapless auto-advance
+                : 0.08 // 80ms micro-crossfade on manual skip to pre-buffered track
+              : 0.015;
+
+          standbyDeck.volume = targetVol;
+
+          if (ctx && incomingGain && outgoingGain) {
+            const now = ctx.currentTime;
+            try {
+              incomingGain.gain.cancelScheduledValues(now);
+              outgoingGain.gain.cancelScheduledValues(now);
+              if (xfadeSec >= 0.25 && wasOutgoingPlaying) {
+                incomingGain.gain.setValueAtTime(0.0001, now);
+                incomingGain.gain.linearRampToValueAtTime(1.0, now + xfadeSec);
+                outgoingGain.gain.setValueAtTime(
+                  Math.max(0.0001, outgoingGain.gain.value || 1.0),
+                  now
+                );
+                outgoingGain.gain.linearRampToValueAtTime(0.0001, now + xfadeSec);
+              } else {
+                incomingGain.gain.setValueAtTime(0.0001, now);
+                incomingGain.gain.linearRampToValueAtTime(1.0, now + 0.015);
+                outgoingGain.gain.setValueAtTime(
+                  Math.max(0.0001, outgoingGain.gain.value || 1.0),
+                  now
+                );
+                outgoingGain.gain.linearRampToValueAtTime(0.0001, now + xfadeSec);
+              }
+            } catch (_) {
+              incomingGain.gain.value = 1.0;
+              outgoingGain.gain.value = 0.0001;
             }
-          })
-          .catch(() => {});
+          }
+
+          if (Number.isFinite(standbyDeck.duration) && standbyDeck.duration > 0) {
+            setDuration(standbyDeck.duration);
+          } else if (track.duration) {
+            setDuration(track.duration);
+          }
+          const startSec = standbyDeck.currentTime || 0;
+          lastProgressUpdateRef.current = startSec;
+          setProgress(startSec);
+
+          standbyDeck
+            .play()
+            .then(() => {
+              setIsPlaying(true);
+              updateMediaSessionPlaybackState(true);
+              syncMediaPositionState(standbyDeck);
+            })
+            .catch((err) => {
+              console.warn("Standby deck play error:", err);
+            });
+
+          // Clean up outgoing deck once crossfade / splice finishes
+          const cleanupMs = Math.max(40, Math.round(xfadeSec * 1000) + 30);
+          crossfadeCleanupTimerRef.current = setTimeout(() => {
+            crossfadeCleanupTimerRef.current = null;
+            try {
+              activeDeck.pause();
+              activeDeck.currentTime = 0;
+              if (outgoingGain && audioContextRef.current) {
+                outgoingGain.gain.setValueAtTime(0.0001, audioContextRef.current.currentTime);
+              }
+            } catch (_) {}
+            // Immediately warm & pre-buffer the next track in queue
+            prepareStandbyDeckRef.current(false);
+          }, cleanupMs);
+        } else {
+          // Standard single-deck start (e.g. first track or unbuffered jump)
+          if (crossfadeCleanupTimerRef.current) {
+            clearTimeout(crossfadeCleanupTimerRef.current);
+            crossfadeCleanupTimerRef.current = null;
+          }
+          if (standbyDeck && standbyDeck !== activeDeck) {
+            try {
+              standbyDeck.pause();
+              standbyDeck.currentTime = 0;
+            } catch (_) {}
+          }
+          standbyPreparedUrlRef.current = "";
+          standbyPreparedTrackIdRef.current = "";
+          setIsNextTrackPrebuffered(false);
+
+          const activeGain = deckGainsRef.current[curDeckIdx];
+          const standbyGain = deckGainsRef.current[standbyDeckIdx];
+          if (ctx && activeGain) {
+            const now = ctx.currentTime;
+            try {
+              activeGain.gain.cancelScheduledValues(now);
+              activeGain.gain.setValueAtTime(0.0001, now);
+              activeGain.gain.linearRampToValueAtTime(1.0, now + 0.012);
+              if (standbyGain) {
+                standbyGain.gain.cancelScheduledValues(now);
+                standbyGain.gain.setValueAtTime(0.0001, now);
+              }
+            } catch (_) {
+              activeGain.gain.value = 1.0;
+              if (standbyGain) standbyGain.gain.value = 0.0001;
+            }
+          }
+
+          activeDeck.volume = targetVol;
+          if (activeDeck.src !== finalStreamUrl) {
+            activeDeck.src = finalStreamUrl;
+          }
+
+          activeDeck
+            .play()
+            .then(() => {
+              setIsPlaying(true);
+            })
+            .catch((err) => {
+              console.warn("Autoplay blocked or stream error:", err);
+            });
+        }
+
+        // Apply cached telemetry headers immediately if already prefetched, otherwise probe via HEAD
+        const cachedMeta = prefetchedHeadersRef.current.get(finalStreamUrl);
+        if (cachedMeta) {
+          setCurrentTrack((prev) => {
+            if (!prev || prev.id !== track.id) return prev;
+            return {
+              ...prev,
+              streamUrl: finalStreamUrl,
+              source: cachedMeta.source || prev.source,
+              format: cachedMeta.format || prev.format,
+              bitDepth: cachedMeta.bitDepth ?? prev.bitDepth,
+              sampleRate: cachedMeta.sampleRate ?? prev.sampleRate,
+              bitrate: cachedMeta.bitrate ?? prev.bitrate,
+              hires: cachedMeta.hires ?? prev.hires,
+              fileName: cachedMeta.fileName || prev.fileName,
+              filePath: cachedMeta.filePath || prev.filePath,
+            };
+          });
+        } else {
+          fetch(finalStreamUrl, { method: "HEAD" })
+            .then((res) => {
+              if (!res.ok) {
+                const errHeader = res.headers.get("x-audio-error");
+                setPlaybackError(errHeader || `Stream unavailable (HTTP ${res.status})`);
+                audioRef.current?.pause();
+                setIsPlaying(false);
+                updateMediaSessionPlaybackState(false);
+                return;
+              }
+
+              const liveSource = res.headers.get("x-audio-source");
+              const liveFormat = res.headers.get("x-audio-format");
+              const liveBitDepth = res.headers.get("x-audio-bit-depth");
+              const liveSampleRate = res.headers.get("x-audio-sample-rate");
+              const liveBitrate = res.headers.get("x-audio-bitrate");
+              const liveIsLossless = res.headers.get("x-audio-is-lossless");
+              const liveFileName = res.headers.get("x-audio-file-name");
+              const liveFilePath = res.headers.get("x-audio-file-path");
+
+              if (liveSource || liveFormat || liveFileName) {
+                setCurrentTrack((prev) => {
+                  if (!prev || prev.id !== track.id) return prev;
+                  return {
+                    ...prev,
+                    streamUrl: finalStreamUrl,
+                    source: liveSource || prev.source,
+                    format: liveFormat || prev.format,
+                    bitDepth: liveBitDepth ? parseInt(liveBitDepth, 10) : prev.bitDepth,
+                    sampleRate: liveSampleRate ? parseInt(liveSampleRate, 10) : prev.sampleRate,
+                    bitrate: liveBitrate ? parseInt(liveBitrate, 10) : prev.bitrate,
+                    hires: liveIsLossless !== null ? liveIsLossless === "true" : prev.hires,
+                    fileName: liveFileName || prev.fileName,
+                    filePath: liveFilePath || prev.filePath,
+                  };
+                });
+              }
+            })
+            .catch(() => {});
+        }
       }
 
       // Pre-load lyrics and recommendations asynchronously
       fetchLyrics(track);
       fetchSuggestions(track);
     },
-    [activeDeviceId, bitPerfectMode, isVolumeLocked, volume, fetchLyrics, fetchSuggestions, initAudioGraph, streamQuality]
+    [
+      activeDeviceId,
+      bitPerfectMode,
+      isVolumeLocked,
+      volume,
+      fetchLyrics,
+      fetchSuggestions,
+      initAudioGraph,
+      buildCanonicalStreamUrl,
+      clearPlaybackError,
+      setPlaybackError,
+    ]
   );
 
   // Seamless on-the-fly audio quality switching (preserving exact millisecond position)
   const switchStreamQuality = useCallback(
     async (newQuality: "flac" | "opus") => {
       setStreamQuality(newQuality);
+      clearPlaybackError();
 
       if (!audioRef.current || !currentTrack) return;
 
@@ -848,17 +1348,40 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       let currentSrc = audio.src || currentTrack.streamUrl;
       if (!currentSrc) return;
 
+      const isTidalId = (val?: string | null) => {
+        if (!val) return false;
+        const cleaned = val.startsWith("tidal-") ? val.slice(6) : val;
+        return (
+          cleaned.length > 0 &&
+          /^\d+$/.test(cleaned) &&
+          currentTrack.source !== "qobuz" &&
+          currentTrack.source !== "itunes"
+        );
+      };
+
       let targetUrl: string;
       try {
         const urlObj = new URL(currentSrc, window.location.origin);
         if (urlObj.pathname.includes("/api/stream")) {
           urlObj.searchParams.set("format", newQuality);
+          if (newQuality === "flac") {
+            const existingId = urlObj.searchParams.get("id");
+            if (existingId && !isTidalId(existingId)) {
+              urlObj.searchParams.delete("id");
+            } else if (!existingId && isTidalId(currentTrack.id)) {
+              urlObj.searchParams.set("id", currentTrack.id);
+            }
+          }
           targetUrl = urlObj.pathname + urlObj.search;
         } else {
-          targetUrl = `/api/stream?artist=${encodeURIComponent(currentTrack.artist)}&title=${encodeURIComponent(currentTrack.title)}&format=${newQuality}`;
+          targetUrl = `/api/stream?artist=${encodeURIComponent(currentTrack.artist)}&title=${encodeURIComponent(currentTrack.title)}&format=${newQuality}${
+            isTidalId(currentTrack.id) ? `&id=${encodeURIComponent(currentTrack.id)}` : ""
+          }`;
         }
       } catch {
-        targetUrl = `/api/stream?artist=${encodeURIComponent(currentTrack.artist)}&title=${encodeURIComponent(currentTrack.title)}&format=${newQuality}`;
+        targetUrl = `/api/stream?artist=${encodeURIComponent(currentTrack.artist)}&title=${encodeURIComponent(currentTrack.title)}&format=${newQuality}${
+          isTidalId(currentTrack.id) ? `&id=${encodeURIComponent(currentTrack.id)}` : ""
+        }`;
       }
 
       const onCanPlay = () => {
@@ -880,6 +1403,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Probe headers to immediately reflect real stream telemetry
       fetch(targetUrl, { method: "HEAD" })
         .then((res) => {
+          if (!res.ok) {
+            const errHeader = res.headers.get("x-audio-error");
+            setPlaybackError(errHeader || `Stream unavailable (HTTP ${res.status})`);
+            audioRef.current?.pause();
+            setIsPlaying(false);
+            updateMediaSessionPlaybackState(false);
+            return;
+          }
+
           const liveSource = res.headers.get("x-audio-source");
           const liveFormat = res.headers.get("x-audio-format");
           const liveBitDepth = res.headers.get("x-audio-bit-depth");
@@ -909,7 +1441,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => {});
     },
-    [currentTrack, isPlaying, setStreamQuality]
+    [currentTrack, isPlaying, setStreamQuality, clearPlaybackError, setPlaybackError]
   );
 
   // Audiophile micro-fade toggle play
@@ -962,6 +1494,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const seek = (seconds: number) => {
     if (!audioRef.current) return;
     audioRef.current.currentTime = seconds;
+    lastProgressUpdateRef.current = seconds;
     setProgress(seconds);
   };
 
@@ -1082,17 +1615,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const playNext = useCallback(() => {
-    const nextIdx = currentIndexRef.current + 1;
-    const q = queueRef.current;
-    if (nextIdx < q.length) {
-      playTrack(q[nextIdx]);
-    } else if (autoplayRef.current && suggestedTracksRef.current.length > 0) {
-      const nextSuggested = suggestedTracksRef.current[0];
-      setSuggestedTracks((prev) => prev.slice(1));
-      playTrack(nextSuggested);
-    }
-  }, [playTrack]);
+  const playNext = useCallback(
+    (fromAutoAdvance?: boolean) => {
+      const nextCand = getNextUpcomingCandidate();
+      if (!nextCand) return;
+      if (nextCand.fromSuggested) {
+        setSuggestedTracks((prev) => {
+          const nextList = prev.filter((t) => t.id !== nextCand.track.id);
+          suggestedTracksRef.current = nextList;
+          return nextList;
+        });
+      }
+      playTrack(nextCand.track, undefined, { fromAutoAdvance: !!fromAutoAdvance });
+    },
+    [getNextUpcomingCandidate, playTrack]
+  );
 
   const playPrevious = useCallback(() => {
     const prevIdx = currentIndexRef.current - 1;
@@ -1204,7 +1741,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    const isLocal = track?.source === "local" || track?.id?.startsWith("local-");
+    const isLocal =
+      track?.source?.includes("local") ||
+      track?.source === "nas" ||
+      track?.id?.startsWith("/") ||
+      track?.id?.startsWith("local-");
     const baseBitrate = track?.bitrate || (track?.hires ? 2400 : isLocal ? 950 : 160);
     const bufferedBytesEstimate = (bufferedSeconds * baseBitrate * 125) / (1024 * 1024);
 
@@ -1351,7 +1892,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const getSignalPath = useCallback((): AudioSignalPath => {
     const track = currentTrack;
     const ctxSampleRate = audioContextRef.current?.sampleRate || 48000;
-    const isLocal = track?.source?.includes("local") || track?.id?.startsWith("/") || track?.id?.startsWith("local-");
+    const isLocal =
+      track?.source?.includes("local") ||
+      track?.source === "nas" ||
+      track?.id?.startsWith("/") ||
+      track?.id?.startsWith("local-");
     const isTidalMaster = track?.source === "tidal-direct-hifi";
     const isSoulseek = track?.source === "soulseek-lossless";
     const isQobuz = track?.source === "qobuz" || track?.id?.startsWith("qobuz-");
@@ -1491,7 +2036,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   ]);
 
   // Refs for media controls to avoid re-triggering audio element setup
-  const playNextRef = useRef<() => void>(() => {});
+  const playNextRef = useRef<(fromAutoAdvance?: boolean) => void>(() => {});
   playNextRef.current = playNext;
 
   const playPreviousRef = useRef<() => void>(() => {});
@@ -1505,91 +2050,189 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const lastPosSyncRef = useRef<number>(0);
 
-  // Main Audio setup & gapless pre-buffer listener (mounted once for application lifetime)
+  // Dual-Deck Audio setup & 0ms gapless / crossfade listener (mounted once for application lifetime)
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const audio = new Audio();
-      audio.crossOrigin = "anonymous";
-      const preBufferAudio = new Audio();
-      preBufferAudio.crossOrigin = "anonymous";
+      const deckA = new Audio();
+      deckA.crossOrigin = "anonymous";
+      deckA.preload = "auto";
+      const deckB = new Audio();
+      deckB.crossOrigin = "anonymous";
+      deckB.preload = "auto";
 
-      audioRef.current = audio;
-      preBufferAudioRef.current = preBufferAudio;
+      decksRef.current = [deckA, deckB];
+      activeDeckIdxRef.current = 0;
+      audioRef.current = deckA;
+      preBufferAudioRef.current = deckB;
 
       // Register OS Lock-Screen / Notification Media Controls (Android & iOS)
-      registerMediaSessionActions(audio, {
+      registerMediaSessionActions(deckA, {
         onPlay: () => togglePlayRef.current(),
         onPause: () => togglePlayRef.current(),
-        onNext: () => playNextRef.current(),
+        onNext: () => playNextRef.current(false),
         onPrevious: () => playPreviousRef.current(),
         onSeek: (seconds) => seekRef.current(seconds),
       });
 
-      audio.addEventListener("error", () => {
-        const err = audio.error;
-        if (!err || err.code === 1) {
-          // Aborted by user action/new track, ignore cleanly
-          return;
-        }
-        console.warn("Audio element error:", err.code, err.message);
-        setIsPlaying(false);
-        updateMediaSessionPlaybackState(false);
-      });
-
-      audio.addEventListener("timeupdate", () => {
-        setProgress(audio.currentTime);
-
-        // Periodically sync lock-screen scrubber position
-        const now = Date.now();
-        if (now - lastPosSyncRef.current > 750) {
-          lastPosSyncRef.current = now;
-          syncMediaPositionState(audio);
-        }
-
-        // Pre-fetch next track when 15 seconds remain for 0ms gapless transition
-        if (audio.duration && audio.duration - audio.currentTime < 15) {
-          const nextIdx = currentIndexRef.current + 1;
-          const q = queueRef.current;
-          if (
-            nextIdx < q.length &&
-            q[nextIdx].streamUrl &&
-            preBufferAudio.src !== q[nextIdx].streamUrl
-          ) {
-            preBufferAudio.src = q[nextIdx].streamUrl!;
+      const attachDeckListeners = (deck: HTMLAudioElement) => {
+        // Standby deck pre-buffer readiness listener
+        const onStandbyReady = () => {
+          if (preBufferAudioRef.current === deck && standbyPreparedUrlRef.current) {
+            setIsNextTrackPrebuffered(true);
           }
-        }
-      });
+        };
+        deck.addEventListener("canplay", onStandbyReady);
+        deck.addEventListener("canplaythrough", onStandbyReady);
 
-      audio.addEventListener("loadedmetadata", () => {
-        setDuration(audio.duration || 0);
-        syncMediaPositionState(audio);
-      });
+        deck.addEventListener("error", () => {
+          if (audioRef.current !== deck) {
+            // Ignore standby pre-buffer errors silently
+            return;
+          }
+          const err = deck.error;
+          if (!err || err.code === 1) {
+            // Aborted by user action/new track, ignore cleanly
+            return;
+          }
+          console.warn("Audio element error:", err.code, err.message);
+          setIsPlaying(false);
+          updateMediaSessionPlaybackState(false);
 
-      audio.addEventListener("seeked", () => {
-        syncMediaPositionState(audio);
-      });
+          if (!playbackErrorRef.current) {
+            const failedSrc = deck.currentSrc || deck.src;
+            if (failedSrc) {
+              fetch(failedSrc, { method: "HEAD" })
+                .then((res) => {
+                  if (!playbackErrorRef.current) {
+                    const errHeader = res.headers.get("x-audio-error");
+                    setPlaybackError(
+                      errHeader ||
+                        (!res.ok
+                          ? `Stream unavailable (HTTP ${res.status})`
+                          : "Playback failed: unable to load audio stream")
+                    );
+                  }
+                })
+                .catch(() => {
+                  if (!playbackErrorRef.current) {
+                    setPlaybackError("Playback failed: unable to load audio stream");
+                  }
+                });
+            } else {
+              setPlaybackError("Playback failed: unable to load audio stream");
+            }
+          }
+        });
 
-      audio.addEventListener("ended", () => {
-        playNextRef.current();
-      });
+        deck.addEventListener("timeupdate", () => {
+          if (audioRef.current !== deck) return;
+          const curTime = deck.currentTime;
+          const dur = deck.duration;
+          if (Math.abs(curTime - lastProgressUpdateRef.current) >= 0.2 || curTime < 0.25) {
+            lastProgressUpdateRef.current = curTime;
+            setProgress(curTime);
+          }
 
-      audio.addEventListener("play", () => {
-        setIsPlaying(true);
-        updateMediaSessionPlaybackState(true);
-        syncMediaPositionState(audio);
-      });
+          // Periodically sync lock-screen scrubber position
+          const now = Date.now();
+          if (now - lastPosSyncRef.current > 750) {
+            lastPosSyncRef.current = now;
+            syncMediaPositionState(deck);
+          }
 
-      audio.addEventListener("pause", () => {
-        setIsPlaying(false);
-        updateMediaSessionPlaybackState(false);
-        syncMediaPositionState(audio);
-      });
+          if (Number.isFinite(dur) && dur > 0) {
+            const remaining = dur - curTime;
+
+            // 1. Pre-warm & pre-buffer upcoming track when <= 25 seconds remain
+            if (remaining < 25) {
+              prepareStandbyDeckRef.current(true);
+            }
+
+            // 2. Trigger seamless 0ms gapless splice or smooth crossfade before final frame ends
+            const xfade = crossfadeSecondsRef.current;
+            const leadTime =
+              xfade > 0
+                ? xfade
+                : gaplessEnabledRef.current
+                ? 0.16
+                : 0;
+
+            if (
+              leadTime > 0 &&
+              dur > Math.max(leadTime + 2.5, 5) &&
+              remaining > 0 &&
+              remaining <= leadTime &&
+              !autoAdvanceTriggeredRef.current
+            ) {
+              const standby = preBufferAudioRef.current;
+              const standbyReady =
+                standby &&
+                standbyPreparedUrlRef.current &&
+                standby.readyState >= 2;
+              if (standbyReady || xfade > 0) {
+                autoAdvanceTriggeredRef.current = true;
+                playNextRef.current(true);
+              }
+            }
+          }
+        });
+
+        deck.addEventListener("loadedmetadata", () => {
+          if (audioRef.current !== deck) return;
+          setDuration(deck.duration || 0);
+          syncMediaPositionState(deck);
+        });
+
+        deck.addEventListener("seeked", () => {
+          if (audioRef.current !== deck) return;
+          if (
+            Number.isFinite(deck.duration) &&
+            deck.duration - deck.currentTime > Math.max(crossfadeSecondsRef.current + 1, 1)
+          ) {
+            autoAdvanceTriggeredRef.current = false;
+          }
+          syncMediaPositionState(deck);
+        });
+
+        deck.addEventListener("ended", () => {
+          if (audioRef.current !== deck) return;
+          if (!autoAdvanceTriggeredRef.current) {
+            autoAdvanceTriggeredRef.current = true;
+            playNextRef.current(true);
+          }
+        });
+
+        deck.addEventListener("play", () => {
+          if (audioRef.current !== deck) return;
+          setIsPlaying(true);
+          updateMediaSessionPlaybackState(true);
+          syncMediaPositionState(deck);
+        });
+
+        deck.addEventListener("pause", () => {
+          if (audioRef.current !== deck) return;
+          setIsPlaying(false);
+          updateMediaSessionPlaybackState(false);
+          syncMediaPositionState(deck);
+        });
+      };
+
+      attachDeckListeners(deckA);
+      attachDeckListeners(deckB);
 
       return () => {
-        audio.pause();
-        audio.removeAttribute("src");
-        preBufferAudio.pause();
-        preBufferAudio.removeAttribute("src");
+        if (playbackErrorTimerRef.current) {
+          clearTimeout(playbackErrorTimerRef.current);
+          playbackErrorTimerRef.current = null;
+        }
+        if (crossfadeCleanupTimerRef.current) {
+          clearTimeout(crossfadeCleanupTimerRef.current);
+          crossfadeCleanupTimerRef.current = null;
+        }
+        deckA.pause();
+        deckA.removeAttribute("src");
+        deckB.pause();
+        deckB.removeAttribute("src");
         if (audioContextRef.current && audioContextRef.current.state !== "closed") {
           audioContextRef.current.close().catch(() => {});
         }
@@ -1597,91 +2240,204 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Proactively warm up backend StreamResolver & standby deck whenever queue, suggestions, or track changes
+  useEffect(() => {
+    if (!currentTrack) return;
+    const timer = setTimeout(() => {
+      prepareStandbyDeck(false);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [
+    currentTrack,
+    currentIndex,
+    queue,
+    suggestedTracks,
+    autoplay,
+    streamQuality,
+    gaplessEnabled,
+    crossfadeSeconds,
+    prepareStandbyDeck,
+  ]);
+
   // Sync Media Session Lock-Screen metadata whenever current track changes
   useEffect(() => {
     updateMediaSessionMetadata(currentTrack);
     if (audioRef.current) {
+      registerMediaSessionActions(audioRef.current, {
+        onPlay: () => togglePlayRef.current(),
+        onPause: () => togglePlayRef.current(),
+        onNext: () => playNextRef.current(false),
+        onPrevious: () => playPreviousRef.current(),
+        onSeek: (seconds) => seekRef.current(seconds),
+      });
       syncMediaPositionState(audioRef.current);
     }
   }, [currentTrack]);
 
+  const handlePlayNextAction = useCallback(() => playNext(false), [playNext]);
+
+  const progressValue = useMemo(
+    () => ({
+      subscribe: subscribeProgress,
+      getSnapshot: getProgressSnapshot,
+      getServerSnapshot: getServerProgressSnapshot,
+      duration,
+    }),
+    [subscribeProgress, getProgressSnapshot, getServerProgressSnapshot, duration]
+  );
+
+  const playerValue = useMemo<PlayerContextType>(
+    () => ({
+      currentTrack,
+      isPlaying,
+      progress: 0,
+      duration,
+      volume,
+      queue,
+      currentIndex,
+      bitPerfectMode,
+      isVolumeLocked,
+      setIsVolumeLocked,
+      toggleVolumeLock,
+      autoPreampGain,
+      lrBalance,
+      setLrBalance,
+      eqGains,
+      isVisualizerOpen,
+      isEqOpen,
+      isSignalPathOpen,
+      isLyricsOpen,
+      isQueueOpen,
+      autoplay,
+      suggestedTracks,
+      lyrics,
+      isLoadingLyrics,
+      isLoadingSuggestions,
+      activeAutoEqPreset,
+      playTrack,
+      togglePlay,
+      seek,
+      setVolume,
+      playNext: handlePlayNextAction,
+      playPrevious,
+      addToQueue,
+      insertNextInQueue,
+      reorderQueue,
+      addAllToQueue,
+      removeFromQueue,
+      clearQueue,
+      setBitPerfectMode,
+      setEqBandGain,
+      applyEqPreset,
+      peqBands,
+      setPeqBand,
+      applyAutoEqPreset,
+      outputDevices,
+      activeDeviceId,
+      selectOutputDevice,
+      fetchOutputDevices,
+      configureOutputDevice,
+      deviceTelemetry,
+      isVuMeterOpen,
+      setIsVuMeterOpen,
+      vuMeterTheme,
+      setVuMeterTheme,
+      setIsVisualizerOpen,
+      setIsEqOpen,
+      setIsSignalPathOpen,
+      setIsLyricsOpen,
+      setIsQueueOpen,
+      setAutoplay,
+      fetchLyrics,
+      fetchSuggestions,
+      getSignalPath,
+      getFrequencyData,
+      getTimeDomainData,
+      getLiveTelemetry,
+      streamQuality,
+      setStreamQuality,
+      switchStreamQuality,
+      autoUpgradeToFlac,
+      setAutoUpgradeToFlac,
+      gaplessEnabled,
+      setGaplessEnabled,
+      crossfadeSeconds,
+      setCrossfadeSeconds,
+      isNextTrackPrebuffered,
+      playbackError,
+      clearPlaybackError,
+    }),
+    [
+      currentTrack,
+      isPlaying,
+      duration,
+      volume,
+      queue,
+      currentIndex,
+      bitPerfectMode,
+      isVolumeLocked,
+      setIsVolumeLocked,
+      toggleVolumeLock,
+      autoPreampGain,
+      lrBalance,
+      setLrBalance,
+      eqGains,
+      isVisualizerOpen,
+      isEqOpen,
+      isSignalPathOpen,
+      isLyricsOpen,
+      isQueueOpen,
+      autoplay,
+      suggestedTracks,
+      lyrics,
+      isLoadingLyrics,
+      isLoadingSuggestions,
+      activeAutoEqPreset,
+      playTrack,
+      handlePlayNextAction,
+      setBitPerfectMode,
+      setEqBandGain,
+      applyEqPreset,
+      setPeqBand,
+      peqBands,
+      applyAutoEqPreset,
+      outputDevices,
+      activeDeviceId,
+      selectOutputDevice,
+      fetchOutputDevices,
+      configureOutputDevice,
+      deviceTelemetry,
+      isVuMeterOpen,
+      setIsVuMeterOpen,
+      vuMeterTheme,
+      setVuMeterTheme,
+      setAutoplay,
+      fetchLyrics,
+      fetchSuggestions,
+      getSignalPath,
+      getFrequencyData,
+      getTimeDomainData,
+      getLiveTelemetry,
+      streamQuality,
+      setStreamQuality,
+      switchStreamQuality,
+      autoUpgradeToFlac,
+      setAutoUpgradeToFlac,
+      gaplessEnabled,
+      setGaplessEnabled,
+      crossfadeSeconds,
+      setCrossfadeSeconds,
+      isNextTrackPrebuffered,
+      playbackError,
+      clearPlaybackError,
+    ]
+  );
+
   return (
-    <PlayerContext.Provider
-      value={{
-        currentTrack,
-        isPlaying,
-        progress,
-        duration,
-        volume,
-        queue,
-        currentIndex,
-        bitPerfectMode,
-        isVolumeLocked,
-        setIsVolumeLocked,
-        toggleVolumeLock,
-        autoPreampGain,
-        lrBalance,
-        setLrBalance,
-        eqGains,
-        isVisualizerOpen,
-        isEqOpen,
-        isSignalPathOpen,
-        isLyricsOpen,
-        isQueueOpen,
-        autoplay,
-        suggestedTracks,
-        lyrics,
-        isLoadingLyrics,
-        isLoadingSuggestions,
-        activeAutoEqPreset,
-        playTrack,
-        togglePlay,
-        seek,
-        setVolume,
-        playNext,
-        playPrevious,
-        addToQueue,
-        insertNextInQueue,
-        reorderQueue,
-        addAllToQueue,
-        removeFromQueue,
-        clearQueue,
-        setBitPerfectMode,
-        setEqBandGain,
-        applyEqPreset,
-        peqBands,
-        setPeqBand,
-        applyAutoEqPreset,
-        outputDevices,
-        activeDeviceId,
-        selectOutputDevice,
-        fetchOutputDevices,
-        configureOutputDevice,
-        deviceTelemetry,
-        isVuMeterOpen,
-        setIsVuMeterOpen,
-        vuMeterTheme,
-        setVuMeterTheme,
-        setIsVisualizerOpen,
-        setIsEqOpen,
-        setIsSignalPathOpen,
-        setIsLyricsOpen,
-        setIsQueueOpen,
-        setAutoplay,
-        fetchLyrics,
-        fetchSuggestions,
-        getSignalPath,
-        getFrequencyData,
-        getTimeDomainData,
-        getLiveTelemetry,
-        streamQuality,
-        setStreamQuality,
-        switchStreamQuality,
-        autoUpgradeToFlac,
-        setAutoUpgradeToFlac,
-      }}
-    >
-      {children}
+    <PlayerContext.Provider value={playerValue}>
+      <PlayerProgressContext.Provider value={progressValue}>
+        {children}
+      </PlayerProgressContext.Provider>
     </PlayerContext.Provider>
   );
 }
@@ -1692,4 +2448,14 @@ export function usePlayer() {
     throw new Error("usePlayer must be used within PlayerProvider");
   }
   return context;
+}
+
+export function usePlayerProgress() {
+  const ctx = useContext(PlayerProgressContext);
+  const progress = useSyncExternalStore(
+    ctx.subscribe,
+    ctx.getSnapshot,
+    ctx.getServerSnapshot
+  );
+  return { progress, duration: ctx.duration };
 }

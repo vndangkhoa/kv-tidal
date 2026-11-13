@@ -5,6 +5,46 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+async fn run_refresh(cfg_store: SharedConfig, lib_store: SharedLibrary) {
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    info!("NAS filesystem change detected; updating music library...");
+
+    let libraries = {
+        let cfg = cfg_store.read().await;
+        cfg.libraries.clone()
+    };
+
+    if let Ok((all_tracks, all_albums, all_artists)) = tokio::task::spawn_blocking(move || {
+        let mut all_tracks = Vec::new();
+        let mut all_albums = Vec::new();
+        let mut all_artists = Vec::new();
+        for lib in libraries {
+            if lib.path.exists() {
+                let (tracks, albums, artists) = scan_directory(&lib.path);
+                all_tracks.extend(tracks);
+                all_albums.extend(albums);
+                all_artists.extend(artists);
+            }
+        }
+        (all_tracks, all_albums, all_artists)
+    })
+    .await
+    {
+        let mut store = lib_store.write().await;
+        for t in all_tracks {
+            store.tracks.insert(t.id.clone(), t);
+        }
+        for a in all_albums {
+            store.albums.insert(a.id.clone(), a);
+        }
+        for ar in all_artists {
+            store.artists.insert(ar.id.clone(), ar);
+        }
+        store.cached_tracks_json = None;
+    }
+    info!("Library refresh completed.");
+}
+
 pub async fn start_library_watcher(config: SharedConfig, library: SharedLibrary) {
     let (tx, mut rx) = mpsc::channel(100);
 
@@ -48,61 +88,14 @@ pub async fn start_library_watcher(config: SharedConfig, library: SharedLibrary)
     tokio::spawn(async move {
         // Keep watcher in scope so it doesn't get dropped
         let _watcher = watcher;
-        let mut debounce_timer = None;
+        let mut debounce_timer: Option<tokio::task::JoinHandle<()>> = None;
 
         while let Some(_event) = rx.recv().await {
-            // Debounce by 4 seconds so multi-file copies don't trigger 100 rescans
-            if debounce_timer.is_none() {
-                let lib_store = library.clone();
-                let cfg_store = config.clone();
-                debounce_timer = Some(tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(4)).await;
-                    info!("NAS filesystem change detected; updating music library...");
-
-                    let cfg = cfg_store.read().await;
-                    for lib in &cfg.libraries {
-                        if lib.path.exists() {
-                            let (tracks, albums, artists) = scan_directory(&lib.path);
-                            let mut store = lib_store.write().await;
-                            for t in tracks {
-                                store.tracks.insert(t.id.clone(), t);
-                            }
-                            for a in albums {
-                                store.albums.insert(a.id.clone(), a);
-                            }
-                            for ar in artists {
-                                store.artists.insert(ar.id.clone(), ar);
-                            }
-                        }
-                    }
-                    info!("Library refresh completed.");
-                }));
-            } else if let Some(timer) = debounce_timer.take() {
+            if let Some(timer) = debounce_timer.take() {
                 timer.abort();
-                let lib_store = library.clone();
-                let cfg_store = config.clone();
-                debounce_timer = Some(tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(4)).await;
-                    info!("NAS filesystem change detected; updating music library...");
-                    let cfg = cfg_store.read().await;
-                    for lib in &cfg.libraries {
-                        if lib.path.exists() {
-                            let (tracks, albums, artists) = scan_directory(&lib.path);
-                            let mut store = lib_store.write().await;
-                            for t in tracks {
-                                store.tracks.insert(t.id.clone(), t);
-                            }
-                            for a in albums {
-                                store.albums.insert(a.id.clone(), a);
-                            }
-                            for ar in artists {
-                                store.artists.insert(ar.id.clone(), ar);
-                            }
-                        }
-                    }
-                    info!("Library refresh completed.");
-                }));
             }
+            // Debounce by 4 seconds so multi-file copies don't trigger 100 rescans
+            debounce_timer = Some(tokio::spawn(run_refresh(config.clone(), library.clone())));
         }
     });
 }

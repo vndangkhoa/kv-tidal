@@ -658,27 +658,29 @@ async fn run_download_pipeline(
     {
         let track_id = format!("{:x}", md5::compute(saved_path.to_string_lossy().as_bytes()));
         let mut lib = state.library.write().await;
-        lib.tracks.insert(
-            track_id.clone(),
-            LibraryTrack {
-                id: track_id,
-                title: payload.title.clone(),
-                artist: payload.artist.clone(),
-                album: payload.album.clone(),
-                track_number: payload.track_number.unwrap_or(1),
-                duration: if duration == 0 { 240 } else { duration },
-                year: payload.year,
-                file_path: saved_path.clone(),
-                format: "flac".to_string(),
-                bit_depth,
-                sample_rate,
-                bitrate: Some(2500),
-                channels: Some(2),
-                hires: bit_depth.map(|b| b > 16).unwrap_or(true),
-                dr_score: Some(13),
-                is_dsd: false,
-            },
-        );
+        let mut new_track = LibraryTrack {
+            id: track_id.clone(),
+            title: payload.title.clone(),
+            artist: payload.artist.clone(),
+            album: payload.album.clone(),
+            track_number: payload.track_number.unwrap_or(1),
+            duration: if duration == 0 { 240 } else { duration },
+            year: payload.year,
+            file_path: saved_path.clone(),
+            format: "flac".to_string(),
+            bit_depth,
+            sample_rate,
+            bitrate: Some(2500),
+            channels: Some(2),
+            hires: bit_depth.map(|b| b > 16).unwrap_or(true),
+            dr_score: Some(13),
+            is_dsd: false,
+            title_norm: String::new(),
+            artist_norm: String::new(),
+            album_norm: String::new(),
+        };
+        new_track.populate_norm();
+        lib.tracks.insert(track_id, new_track);
 
         let album_key = format!("{} - {}", payload.artist, payload.album);
         let album_id = format!("{:x}", md5::compute(album_key.as_bytes()));
@@ -691,6 +693,8 @@ async fn run_download_pipeline(
             year: payload.year,
             track_count: 0,
             cover_path: cover_path.clone(),
+            name_norm: crate::api::search_tracker::normalize_diacritics(&payload.album),
+            artist_norm: crate::api::search_tracker::normalize_diacritics(&payload.artist),
         });
         album_entry.track_count += 1;
         if album_entry.cover_path.is_none() {
@@ -704,9 +708,11 @@ async fn run_download_pipeline(
             name: payload.artist.clone(),
             album_count: 0,
             track_count: 0,
+            name_norm: crate::api::search_tracker::normalize_diacritics(&payload.artist),
         });
         artist_entry.track_count += 1;
         artist_entry.album_count = artist_album_count;
+        lib.cached_tracks_json = None;
     }
 
     // Stage 5: Completed

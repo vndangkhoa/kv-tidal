@@ -150,7 +150,7 @@ impl SoulseekEngine {
                     }
                 } else {
                     SoulseekStatus {
-                        connected: false,
+                        connected: true,
                         is_logged_in: false,
                         server_version: Some(format!("slskd v{}", version_str)),
                         error: Some(format!(
@@ -193,6 +193,26 @@ impl SoulseekEngine {
             .send()
             .await;
         Ok(())
+    }
+
+    /// Ensure slskd is connected and logged in to the Soulseek central server;
+    /// if not logged in, triggers connection and polls briefly until logged in.
+    pub async fn ensure_connected_and_logged_in(&self) -> bool {
+        let status = self.check_status().await;
+        if status.is_logged_in {
+            return true;
+        }
+        info!("slskd is not logged in to Soulseek network; triggering connect and awaiting login...");
+        let _ = self.trigger_connect().await;
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let st = self.check_status().await;
+            if st.is_logged_in {
+                info!("slskd connected and logged in to Soulseek network");
+                return true;
+            }
+        }
+        false
     }
 
     /// Restart slskd application to reload configuration from slskd.yml
@@ -358,7 +378,7 @@ impl SoulseekEngine {
             "minimumUploadSpeed": 0,
         });
 
-        let resp = self
+        let mut resp = self
             .client
             .post(&create_url)
             .headers(headers.clone())
@@ -366,6 +386,26 @@ impl SoulseekEngine {
             .send()
             .await
             .map_err(|e| format!("Failed to initiate Soulseek search: {}", e))?;
+
+        if resp.status() == reqwest::StatusCode::CONFLICT || !resp.status().is_success() {
+            let first_status = resp.status();
+            if first_status == reqwest::StatusCode::CONFLICT || !self.check_status().await.is_logged_in {
+                warn!(
+                    "slskd search returned HTTP {} (disconnected from Soulseek network); reconnecting and retrying...",
+                    first_status
+                );
+                if self.ensure_connected_and_logged_in().await {
+                    resp = self
+                        .client
+                        .post(&create_url)
+                        .headers(headers.clone())
+                        .json(&payload)
+                        .send()
+                        .await
+                        .map_err(|e| format!("Failed to initiate Soulseek search on retry: {}", e))?;
+                }
+            }
+        }
 
         if !resp.status().is_success() {
             return Err(format!("slskd search failed: HTTP {}", resp.status()));
@@ -506,6 +546,8 @@ impl SoulseekEngine {
             return Err("Soulseek engine is disabled in settings".to_string());
         }
 
+        let _ = self.ensure_connected_and_logged_in().await;
+
         let headers = self.build_headers(api_key.as_deref());
 
         let cleaned_t = clean_query_title(&query.title);
@@ -583,6 +625,8 @@ impl SoulseekEngine {
         if !enabled {
             return Err("Soulseek engine is disabled".to_string());
         }
+
+        let _ = self.ensure_connected_and_logged_in().await;
 
         let download_url = format!(
             "{}/api/v0/transfers/downloads/{}",

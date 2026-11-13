@@ -14,14 +14,14 @@ pub mod trending;
 use crate::state::AppState;
 use axum::Router;
 
-pub fn router() -> Router<AppState> {
+pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .nest("/artists", artists::router())
         .nest("/trending", trending::router())
         .nest("/search", search::router())
         .nest("/download", download::router())
         .nest("/library", library::router())
-        .nest("/fs", fs::router())
+        .nest("/fs", fs::router(state))
         .nest("/stream", stream::router())
         .nest("/settings", settings::router())
         .nest("/lyrics", lyrics::router())

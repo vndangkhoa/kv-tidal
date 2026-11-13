@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, Suspense, useMemo, useCallback, useRef } from "react";
+import React, { useEffect, useState, Suspense, useMemo, useCallback, useRef, useDeferredValue } from "react";
 import { useSearchParams } from "next/navigation";
 import { LibraryAlbum, LibraryArtist, LibraryTrack, MappedFolder, PlayableTrack } from "@/types";
 import { usePlayer } from "@/context/PlayerContext";
@@ -35,6 +35,15 @@ interface LibraryCache {
 }
 
 let globalLibraryCache: LibraryCache | null = null;
+
+function normalizeVi(s: string): string {
+  return (s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase();
+}
 
 function LibraryContent() {
   const searchParams = useSearchParams();
@@ -107,11 +116,16 @@ function LibraryContent() {
 
   const [displayLimit, setDisplayLimit] = useState(60);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const deferredQueryNorm = useMemo(
+    () => normalizeVi(deferredSearchQuery.trim()),
+    [deferredSearchQuery]
+  );
 
-  // Reset windowing limit on tab switch, search, or sort change
+  // Reset windowing limit on tab switch, deferred search, or sort change
   useEffect(() => {
     setDisplayLimit(60);
-  }, [activeView, searchQuery, sortBy]);
+  }, [activeView, deferredQueryNorm, sortBy]);
 
   // Infinite scroll observer: load next batch when sentinel enters viewport (with 600px buffer)
   useEffect(() => {
@@ -129,7 +143,7 @@ function LibraryContent() {
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [sentinelRef.current, activeView, searchQuery, sortBy]);
+  }, [activeView, deferredQueryNorm, sortBy, loading]);
 
   const fetchLibrary = async (isBackground = false) => {
     if (!isBackground && !globalLibraryCache) {
@@ -259,76 +273,131 @@ function LibraryContent() {
       : "13.0";
   }, [tracks]);
 
-  // Filter lists based on searchQuery and activeView
-  const queryLower = searchQuery.trim().toLowerCase();
+  // Pre-compute normalized search & sort keys ONCE when library loads (zero per-keystroke sorting!)
+  const indexedTracks = useMemo(() => {
+    return tracks.map((t) => {
+      const titleNorm = normalizeVi(t.title);
+      const artistNorm = normalizeVi(t.artist);
+      const albumNorm = normalizeVi(t.album);
+      const isHiresTrack =
+        Boolean(t.hires) ||
+        (t.bit_depth ? t.bit_depth > 16 : false) ||
+        (t.sample_rate ? t.sample_rate > 44100 : false);
+      const isDsdTrack =
+        Boolean(t.is_dsd) ||
+        t.format?.toLowerCase() === "dsf" ||
+        t.format?.toLowerCase() === "dff";
+      return {
+        track: t,
+        titleNorm,
+        artistNorm,
+        searchBlob: `${titleNorm} ${artistNorm} ${albumNorm}`,
+        isHiresTrack,
+        isDsdTrack,
+      };
+    });
+  }, [tracks]);
 
-  const filterTrackBySearch = useCallback(
-    (t: LibraryTrack) => {
-      if (!queryLower) return true;
-      return (
-        t.title.toLowerCase().includes(queryLower) ||
-        t.artist.toLowerCase().includes(queryLower) ||
-        t.album.toLowerCase().includes(queryLower)
-      );
-    },
-    [queryLower]
-  );
+  const sortedIndexedTracks = useMemo(() => {
+    return [...indexedTracks].sort((a, b) => {
+      if (sortBy === "dr") return (b.track.dr_score || 0) - (a.track.dr_score || 0);
+      if (sortBy === "artist") {
+        return a.artistNorm < b.artistNorm ? -1 : a.artistNorm > b.artistNorm ? 1 : 0;
+      }
+      if (sortBy === "hires") {
+        const aVal = (a.track.bit_depth || 16) * 1000000 + (a.track.sample_rate || 44100);
+        const bVal = (b.track.bit_depth || 16) * 1000000 + (b.track.sample_rate || 44100);
+        return bVal - aVal;
+      }
+      return a.titleNorm < b.titleNorm ? -1 : a.titleNorm > b.titleNorm ? 1 : 0;
+    });
+  }, [indexedTracks, sortBy]);
 
-  const sortTracksList = useCallback(
-    (list: LibraryTrack[]) => {
-      return [...list].sort((a, b) => {
-        if (sortBy === "dr") return (b.dr_score || 0) - (a.dr_score || 0);
-        if (sortBy === "artist") return a.artist.localeCompare(b.artist);
-        if (sortBy === "hires") {
-          const aVal = (a.bit_depth || 16) * 1000000 + (a.sample_rate || 44100);
-          const bVal = (b.bit_depth || 16) * 1000000 + (b.sample_rate || 44100);
-          return bVal - aVal;
-        }
-        return a.title.localeCompare(b.title);
-      });
-    },
-    [sortBy]
-  );
+  const indexedSortedAlbums = useMemo(() => {
+    return albums
+      .map((alb) => {
+        const nameNorm = normalizeVi(alb.name);
+        return {
+          album: alb,
+          nameNorm,
+          searchBlob: `${nameNorm} ${normalizeVi(alb.artist)}`,
+        };
+      })
+      .sort((a, b) => (a.nameNorm < b.nameNorm ? -1 : a.nameNorm > b.nameNorm ? 1 : 0));
+  }, [albums]);
+
+  const indexedSortedArtists = useMemo(() => {
+    return artists
+      .map((art) => {
+        const nameNorm = normalizeVi(art.name);
+        return { artist: art, nameNorm };
+      })
+      .sort((a, b) => (a.nameNorm < b.nameNorm ? -1 : a.nameNorm > b.nameNorm ? 1 : 0));
+  }, [artists]);
 
   const hiresTracks = useMemo(() => {
-    return sortTracksList(
-      tracks.filter(
-        (t) =>
-          (t.hires || (t.bit_depth && t.bit_depth > 16) || (t.sample_rate && t.sample_rate > 44100)) &&
-          filterTrackBySearch(t)
-      )
-    );
-  }, [tracks, sortTracksList, filterTrackBySearch]);
+    const res: LibraryTrack[] = [];
+    for (let i = 0; i < sortedIndexedTracks.length; i++) {
+      const item = sortedIndexedTracks[i];
+      if (!item.isHiresTrack) continue;
+      if (deferredQueryNorm && !item.searchBlob.includes(deferredQueryNorm)) continue;
+      res.push(item.track);
+    }
+    return res;
+  }, [sortedIndexedTracks, deferredQueryNorm]);
 
   const dsdTracks = useMemo(() => {
-    return sortTracksList(
-      tracks.filter(
-        (t) =>
-          (t.is_dsd || t.format?.toLowerCase() === "dsf" || t.format?.toLowerCase() === "dff") &&
-          filterTrackBySearch(t)
-      )
-    );
-  }, [tracks, sortTracksList, filterTrackBySearch]);
+    const res: LibraryTrack[] = [];
+    for (let i = 0; i < sortedIndexedTracks.length; i++) {
+      const item = sortedIndexedTracks[i];
+      if (!item.isDsdTrack) continue;
+      if (deferredQueryNorm && !item.searchBlob.includes(deferredQueryNorm)) continue;
+      res.push(item.track);
+    }
+    return res;
+  }, [sortedIndexedTracks, deferredQueryNorm]);
 
   const allFilteredTracks = useMemo(() => {
-    return sortTracksList(tracks.filter(filterTrackBySearch));
-  }, [tracks, sortTracksList, filterTrackBySearch]);
+    if (!deferredQueryNorm) {
+      return sortedIndexedTracks.map((item) => item.track);
+    }
+    const res: LibraryTrack[] = [];
+    for (let i = 0; i < sortedIndexedTracks.length; i++) {
+      const item = sortedIndexedTracks[i];
+      if (item.searchBlob.includes(deferredQueryNorm)) {
+        res.push(item.track);
+      }
+    }
+    return res;
+  }, [sortedIndexedTracks, deferredQueryNorm]);
 
   const filteredAlbums = useMemo(() => {
-    const list = albums.filter((alb) => {
-      if (!queryLower) return true;
-      return alb.name.toLowerCase().includes(queryLower) || alb.artist.toLowerCase().includes(queryLower);
-    });
-    return list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  }, [albums, queryLower]);
+    if (!deferredQueryNorm) {
+      return indexedSortedAlbums.map((item) => item.album);
+    }
+    const res: LibraryAlbum[] = [];
+    for (let i = 0; i < indexedSortedAlbums.length; i++) {
+      const item = indexedSortedAlbums[i];
+      if (item.searchBlob.includes(deferredQueryNorm)) {
+        res.push(item.album);
+      }
+    }
+    return res;
+  }, [indexedSortedAlbums, deferredQueryNorm]);
 
   const filteredArtists = useMemo(() => {
-    const list = artists.filter((art) => {
-      if (!queryLower) return true;
-      return art.name.toLowerCase().includes(queryLower);
-    });
-    return list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  }, [artists, queryLower]);
+    if (!deferredQueryNorm) {
+      return indexedSortedArtists.map((item) => item.artist);
+    }
+    const res: LibraryArtist[] = [];
+    for (let i = 0; i < indexedSortedArtists.length; i++) {
+      const item = indexedSortedArtists[i];
+      if (item.nameNorm.includes(deferredQueryNorm)) {
+        res.push(item.artist);
+      }
+    }
+    return res;
+  }, [indexedSortedArtists, deferredQueryNorm]);
 
   const alphabetData = useMemo(() => {
     const isAlphabetical =

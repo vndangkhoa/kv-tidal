@@ -58,11 +58,16 @@ impl AppState {
         trending: SharedTrending,
         library: SharedLibrary,
     ) -> Self {
-        let (tidal_token, tidal_quality) = {
+        let (tidal_token, tidal_refresh, tidal_country, tidal_quality) = {
             if let Ok(c) = config.try_read() {
-                (c.tidal_access_token.clone(), Some(c.tidal_quality.clone()))
+                (
+                    c.tidal_access_token.clone(),
+                    c.tidal_refresh_token.clone(),
+                    c.tidal_country_code.clone(),
+                    Some(c.tidal_quality.clone()),
+                )
             } else {
-                (None, None)
+                (None, None, None, None)
             }
         };
 
@@ -71,7 +76,13 @@ impl AppState {
             trending,
             library,
             metadata: Arc::new(MetadataResolver::new()),
-            tidal: Arc::new(TidalEngine::new(None, None, tidal_token, tidal_quality)),
+            tidal: Arc::new(TidalEngine::new(
+                None,
+                tidal_country,
+                tidal_token,
+                tidal_refresh,
+                tidal_quality,
+            )),
             qobuz: Arc::new(QobuzEngine::new(None)),
             soulseek: Arc::new(SoulseekEngine::new(config)),
             resolver: Arc::new(StreamResolver::new()),

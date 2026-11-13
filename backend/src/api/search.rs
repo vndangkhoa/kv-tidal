@@ -199,10 +199,36 @@ async fn handle_search_suggestions(
 
     // 1. Search Local Library (Artists, Tracks, Albums)
     {
+        let data_dir = state.config.read().await.data_dir.clone();
+        let covers_dir = data_dir.join("covers");
         let lib = state.library.read().await;
 
+        let mut album_cover_lookup: HashMap<(&str, &str), &str> = HashMap::new();
+        for alb in lib.albums.values() {
+            if alb.cover_path.is_some() {
+                album_cover_lookup.insert((alb.artist.as_str(), alb.name.as_str()), alb.id.as_str());
+            }
+        }
+
+        let resolve_fast_local_cover = |track: &crate::storage::scanner::LibraryTrack| -> Option<String> {
+            let track_cache = covers_dir.join(format!("track_{}.jpg", track.id));
+            if track_cache.exists() {
+                return Some(format!("/rest/getCoverArt.view?id=cover-{}", track.id));
+            }
+            if let Some(alb_id) = album_cover_lookup.get(&(track.artist.as_str(), track.album.as_str())) {
+                return Some(format!("/rest/getCoverArt.view?id=album-{}", alb_id));
+            }
+            None
+        };
+
         for artist in lib.artists.values() {
-            let a_norm = normalize_diacritics(&artist.name);
+            let a_norm_owned;
+            let a_norm: &str = if artist.name_norm.is_empty() {
+                a_norm_owned = normalize_diacritics(&artist.name);
+                &a_norm_owned
+            } else {
+                &artist.name_norm
+            };
             if a_norm == q_norm {
                 let key = format!("artist:{}", a_norm);
                 if seen_keys.insert(key) {
@@ -245,9 +271,21 @@ async fn handle_search_suggestions(
             }
         }
 
-        for track in lib.tracks.values().take(2000) {
-            let t_norm = normalize_diacritics(&track.title);
-            let a_norm = normalize_diacritics(&track.artist);
+        for track in lib.tracks.values() {
+            let t_norm_owned;
+            let t_norm: &str = if track.title_norm.is_empty() {
+                t_norm_owned = normalize_diacritics(&track.title);
+                &t_norm_owned
+            } else {
+                &track.title_norm
+            };
+            let a_norm_owned;
+            let a_norm: &str = if track.artist_norm.is_empty() {
+                a_norm_owned = normalize_diacritics(&track.artist);
+                &a_norm_owned
+            } else {
+                &track.artist_norm
+            };
 
             if t_norm.starts_with(&q_norm) {
                 let key = format!("track:{}", t_norm);
@@ -257,7 +295,7 @@ async fn handle_search_suggestions(
                             r#type: "track".to_string(),
                             text: track.title.clone(),
                             subtext: Some(format!("Track by {}", track.artist)),
-                            cover_url: Some(format!("/rest/getCoverArt.view?id=cover-{}", track.id)),
+                            cover_url: resolve_fast_local_cover(track),
                         },
                         75,
                     ));
@@ -270,7 +308,7 @@ async fn handle_search_suggestions(
                             r#type: "track".to_string(),
                             text: track.title.clone(),
                             subtext: Some(format!("Track by {}", track.artist)),
-                            cover_url: Some(format!("/rest/getCoverArt.view?id=cover-{}", track.id)),
+                            cover_url: resolve_fast_local_cover(track),
                         },
                         45,
                     ));
@@ -344,6 +382,16 @@ async fn handle_search_suggestions(
     Json(serde_json::json!({ "suggestions": top_suggestions }))
 }
 
+static SEARCH_CACHE: std::sync::OnceLock<
+    tokio::sync::RwLock<HashMap<String, (std::time::Instant, Vec<SearchResultItem>)>>,
+> = std::sync::OnceLock::new();
+
+fn search_cache() -> &'static tokio::sync::RwLock<
+    HashMap<String, (std::time::Instant, Vec<SearchResultItem>)>,
+> {
+    SEARCH_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+}
+
 /// Full search endpoint with multi-source retrieval, diacritic tolerance, and query logging
 async fn handle_search(
     Query(query): Query<SearchQuery>,
@@ -358,6 +406,24 @@ async fn handle_search(
     state.search_tracker.record_query(q).await;
 
     let q_norm = normalize_diacritics(q);
+    let source_filter = query.source.as_deref().unwrap_or("all");
+    let q_lower = q.to_lowercase();
+    let is_direct_url = q_lower.starts_with("http://")
+        || q_lower.starts_with("https://")
+        || q_lower.contains("tidal.com")
+        || q_lower.contains("qobuz.com")
+        || q_lower.contains("spotify.com");
+
+    let cache_key = format!("{}:{}", source_filter, q_norm);
+    if !is_direct_url && q_norm.len() >= 2 {
+        let guard = search_cache().read().await;
+        if let Some((ts, cached)) = guard.get(&cache_key) {
+            if ts.elapsed() < std::time::Duration::from_secs(60) {
+                return Json(serde_json::json!({ "results": cached }));
+            }
+        }
+    }
+
     let q_tokens: Vec<&str> = q_norm.split_whitespace().collect();
 
     let mut local_results: Vec<(SearchResultItem, i32)> = Vec::new();
@@ -367,9 +433,27 @@ async fn handle_search(
     {
         let lib = state.library.read().await;
         for track in lib.tracks.values() {
-            let title_norm = normalize_diacritics(&track.title);
-            let artist_norm = normalize_diacritics(&track.artist);
-            let album_norm = normalize_diacritics(&track.album);
+            let title_owned;
+            let title_norm: &str = if track.title_norm.is_empty() {
+                title_owned = normalize_diacritics(&track.title);
+                &title_owned
+            } else {
+                &track.title_norm
+            };
+            let artist_owned;
+            let artist_norm: &str = if track.artist_norm.is_empty() {
+                artist_owned = normalize_diacritics(&track.artist);
+                &artist_owned
+            } else {
+                &track.artist_norm
+            };
+            let album_owned;
+            let album_norm: &str = if track.album_norm.is_empty() {
+                album_owned = normalize_diacritics(&track.album);
+                &album_owned
+            } else {
+                &track.album_norm
+            };
 
             let mut score = 0;
 
@@ -426,23 +510,51 @@ async fn handle_search(
     let mut final_results: Vec<SearchResultItem> =
         local_results.into_iter().map(|(item, _)| item).collect();
 
-    let source_filter = query.source.as_deref().unwrap_or("all");
-
-    // 2. Parallel Search for Tidal and Qobuz (if requested)
+    // 2. Parallel Search for Tidal and Qobuz with 4s tight timeout
     let should_search_tidal = source_filter == "all" || source_filter == "tidal";
     let should_search_qobuz = source_filter == "all" || source_filter == "qobuz";
 
     let (tidal_res, qobuz_res) = tokio::join!(
         async {
             if should_search_tidal {
-                state.tidal.search_tracks(q).await.ok()
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(4000),
+                    state.tidal.search_tracks(q),
+                )
+                .await
+                {
+                    Ok(Ok(tracks)) => Some(tracks),
+                    Ok(Err(e)) => {
+                        tracing::debug!("Tidal search error for '{}': {}", q, e);
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!("Tidal search timed out (>4s) for '{}'", q);
+                        None
+                    }
+                }
             } else {
                 None
             }
         },
         async {
             if should_search_qobuz {
-                state.qobuz.search_tracks(q).await.ok()
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(4000),
+                    state.qobuz.search_tracks(q),
+                )
+                .await
+                {
+                    Ok(Ok(tracks)) => Some(tracks),
+                    Ok(Err(e)) => {
+                        tracing::debug!("Qobuz search error for '{}': {}", q, e);
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!("Qobuz search timed out (>4s) for '{}'", q);
+                        None
+                    }
+                }
             } else {
                 None
             }
@@ -548,6 +660,17 @@ async fn handle_search(
                 dr_score: Some(8),
             });
         }
+    }
+
+    if !is_direct_url && q_norm.len() >= 2 && !final_results.is_empty() {
+        let mut guard = search_cache().write().await;
+        if guard.len() >= 128 {
+            guard.retain(|_, (ts, _)| ts.elapsed() < std::time::Duration::from_secs(60));
+            if guard.len() >= 128 {
+                guard.clear();
+            }
+        }
+        guard.insert(cache_key, (std::time::Instant::now(), final_results.clone()));
     }
 
     Json(serde_json::json!({ "results": final_results }))

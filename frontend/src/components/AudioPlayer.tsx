@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { usePlayer } from "@/context/PlayerContext";
+import { usePlayer, usePlayerProgress } from "@/context/PlayerContext";
 import {
   Play,
   Pause,
@@ -28,6 +28,8 @@ import {
   Maximize2,
   Check,
   Loader2,
+  AlertCircle,
+  X,
 } from "lucide-react";
 import { useDownloads } from "@/context/DownloadContext";
 import { SignalPathModal } from "./SignalPathModal";
@@ -40,11 +42,10 @@ import { ArtworkModal } from "./ArtworkModal";
 import { DevicePickerPopover } from "./DevicePickerPopover";
 
 export function AudioPlayer() {
+  const { progress, duration } = usePlayerProgress();
   const {
     currentTrack,
     isPlaying,
-    progress,
-    duration,
     volume,
     bitPerfectMode,
     isVolumeLocked,
@@ -68,6 +69,13 @@ export function AudioPlayer() {
     currentIndex,
     streamQuality,
     switchStreamQuality,
+    gaplessEnabled,
+    setGaplessEnabled,
+    crossfadeSeconds,
+    setCrossfadeSeconds,
+    isNextTrackPrebuffered,
+    playbackError,
+    clearPlaybackError,
   } = usePlayer();
 
   const [isLiked, setIsLiked] = useState(false);
@@ -101,7 +109,33 @@ export function AudioPlayer() {
 
   const { downloadTrack, getTrackDownloadStatus, setIsManagerOpen } = useDownloads();
 
-  if (!currentTrack) return null;
+  if (!currentTrack && !playbackError) return null;
+
+  const playbackErrorBanner = playbackError ? (
+    <div
+      role="alert"
+      className="fixed bottom-[124px] md:bottom-[88px] left-1/2 -translate-x-1/2 z-50 w-[calc(100%-1.5rem)] max-w-lg flex items-start space-x-3 px-4 py-3 rounded-xl bg-surface/95 backdrop-blur-md border border-rose-500/40 shadow-[0_12px_40px_rgba(0,0,0,0.85)] animate-in fade-in slide-in-from-bottom-3 duration-200 select-none"
+    >
+      <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
+      <div className="flex-1 min-w-0 text-xs">
+        <div className="font-semibold text-rose-300">Playback Error</div>
+        <div className="text-textSecondary mt-0.5 break-words leading-relaxed">
+          {playbackError}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={clearPlaybackError}
+        title="Dismiss error"
+        aria-label="Dismiss playback error"
+        className="flex-shrink-0 p-1 rounded-md text-textSecondary hover:text-white hover:bg-card transition-colors cursor-pointer"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  ) : null;
+
+  if (!currentTrack) return playbackErrorBanner;
 
   const downloadStatus = getTrackDownloadStatus(currentTrack.title, currentTrack.artist);
 
@@ -151,7 +185,10 @@ export function AudioPlayer() {
   };
 
   // Audiophile badge format & Real Source Distinction
-  const isLocal = currentTrack.source?.includes("local") || currentTrack.id.startsWith("/");
+  const isLocal =
+    currentTrack.source?.includes("local") ||
+    currentTrack.source === "nas" ||
+    currentTrack.id.startsWith("/");
   const isTidalMaster = currentTrack.source === "tidal-direct-hifi";
   const isSoulseek = currentTrack.source === "soulseek-lossless";
   const isWebOpus = currentTrack.source === "web-stream-opus" || (!isLocal && !isTidalMaster && !isSoulseek && !currentTrack.isDsd);
@@ -216,6 +253,8 @@ export function AudioPlayer() {
 
   return (
     <>
+      {playbackErrorBanner}
+
       {/* ========================================================================= */}
       {/* 1. DESKTOP BOTTOM PLAYER BAR (76px fixed, TIDAL 3-zone layout)             */}
       {/* ========================================================================= */}
@@ -361,10 +400,20 @@ export function AudioPlayer() {
               disabled={
                 currentIndex >= queue.length - 1 && (!autoplay || suggestedTracks.length === 0)
               }
-              title="Next Track (Pre-buffered 0ms Gapless)"
-              className="text-textSecondary hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
+              title={
+                isNextTrackPrebuffered
+                  ? `Next Track Ready in Standby Deck (${crossfadeSeconds > 0 ? `${crossfadeSeconds}s Crossfade` : "0ms Gapless"})`
+                  : "Next Track"
+              }
+              className="relative text-textSecondary hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
             >
               <SkipForward className="w-4 h-4 fill-current" />
+              {gaplessEnabled && isNextTrackPrebuffered && (
+                <span
+                  className="absolute -top-1 -right-1.5 w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]"
+                  title="Next track pre-buffered in standby deck (0ms ready)"
+                />
+              )}
             </button>
 
             <button
@@ -487,10 +536,74 @@ export function AudioPlayer() {
             </button>
 
             {isStudioToolsOpen && (
-              <div className="absolute bottom-full mb-3 right-0 w-64 bg-[#141414] border border-white/15 rounded-2xl p-2.5 shadow-[0_20px_50px_rgba(0,0,0,0.95)] z-50 space-y-1.5 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none">
+              <div className="absolute bottom-full mb-3 right-0 w-72 bg-[#141414] border border-white/15 rounded-2xl p-2.5 shadow-[0_20px_50px_rgba(0,0,0,0.95)] z-50 space-y-1.5 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none">
                 <div className="px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-textSecondary border-b border-white/10 flex items-center justify-between">
                   <span>Studio Audio Suite</span>
                   <span className="text-primary text-[9px] font-mono">DSP & METERS</span>
+                </div>
+
+                {/* 0. Dual-Deck Gapless & Crossfade Engine */}
+                <div className="px-2.5 py-2 rounded-xl bg-white/[0.03] border border-white/10 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-white flex items-center space-x-1.5">
+                        <span>Gapless & Crossfade</span>
+                        {gaplessEnabled && isNextTrackPrebuffered && (
+                          <span className="px-1.5 py-0.2 rounded text-[8px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            READY
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-textSecondary">
+                        {gaplessEnabled
+                          ? crossfadeSeconds > 0
+                            ? `Dual-deck ${crossfadeSeconds}s overlap crossfade`
+                            : "Dual-deck 0ms seamless transition"
+                          : "Standard track transition"}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setGaplessEnabled(!gaplessEnabled)}
+                      aria-label="Toggle Gapless Playback"
+                      className={`relative inline-flex h-4 w-8 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                        gaplessEnabled ? "bg-emerald-400" : "bg-neutral-700"
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-black shadow transition duration-200 ease-in-out ${
+                          gaplessEnabled ? "translate-x-4" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {gaplessEnabled && (
+                    <div className="pt-1 border-t border-white/5">
+                      <div className="flex items-center justify-between text-[9px] font-mono text-textSecondary mb-1">
+                        <span>TRANSITION OVERLAP</span>
+                        <span className="text-emerald-300 font-bold">
+                          {crossfadeSeconds === 0 ? "0ms GAPLESS" : `${crossfadeSeconds}s CROSSFADE`}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-6 gap-1">
+                        {[0, 2, 4, 6, 8, 12].map((sec) => (
+                          <button
+                            key={sec}
+                            type="button"
+                            onClick={() => setCrossfadeSeconds(sec)}
+                            className={`py-1 rounded text-[9px] font-mono font-bold transition-all cursor-pointer border ${
+                              crossfadeSeconds === sec
+                                ? "bg-emerald-500/25 text-emerald-300 border-emerald-500/50 shadow-[0_0_8px_rgba(16,185,129,0.25)]"
+                                : "bg-white/[0.03] text-textSecondary border-white/10 hover:text-white hover:bg-white/[0.08]"
+                            }`}
+                          >
+                            {sec === 0 ? "0ms" : `${sec}s`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* 1. Equalizer */}

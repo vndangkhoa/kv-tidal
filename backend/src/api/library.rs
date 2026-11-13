@@ -31,6 +31,7 @@ pub struct AddLibraryRequest {
     pub name: String,
     pub path: String,
     pub is_download_target: Option<bool>,
+    pub passcode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,8 +141,26 @@ async fn get_album_details(
 
 async fn add_library_path(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<AddLibraryRequest>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let unlocked_by_cookie = crate::api::fs::is_request_nas_unlocked(&state, &headers, None).await;
+    if !unlocked_by_cookie {
+        let cfg = state.config.read().await;
+        if cfg.nas_passcode_enabled {
+            let supplied = payload.passcode.as_deref().unwrap_or("").trim();
+            if !crate::api::fs::constant_time_eq(
+                supplied.as_bytes(),
+                cfg.nas_passcode.as_bytes(),
+            ) {
+                return Err((
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({ "error": "NAS passcode required to map NAS shares" })),
+                ));
+            }
+        }
+    }
+
     let p = PathBuf::from(&payload.path);
     let is_download_target = payload.is_download_target.unwrap_or(false);
 
@@ -170,24 +189,28 @@ async fn add_library_path(
         let _ = cfg.save(&config_path);
     }
 
-    // Trigger immediate scan of this new library path in background
+    // Trigger immediate scan of this new library path in background blocking pool
     let lib_store = state.library.clone();
     tokio::spawn(async move {
-        let (tracks, albums, artists) = scan_directory(&p);
-        let mut store = lib_store.write().await;
-        for t in tracks {
-            store.tracks.insert(t.id.clone(), t);
+        let p_scan = p.clone();
+        if let Ok((tracks, albums, artists)) =
+            tokio::task::spawn_blocking(move || scan_directory(&p_scan)).await
+        {
+            let mut store = lib_store.write().await;
+            for t in tracks {
+                store.tracks.insert(t.id.clone(), t);
+            }
+            for a in albums {
+                store.albums.insert(a.id.clone(), a);
+            }
+            for ar in artists {
+                store.artists.insert(ar.id.clone(), ar);
+            }
+            store.cached_tracks_json = None;
         }
-        for a in albums {
-            store.albums.insert(a.id.clone(), a);
-        }
-        for ar in artists {
-            store.artists.insert(ar.id.clone(), ar);
-        }
-        store.cached_tracks_json = None;
     });
 
-    Json(serde_json::json!({ "status": "ok", "message": "Library path added and scan initiated" }))
+    Ok(Json(serde_json::json!({ "status": "ok", "message": "Library path added and scan initiated" })))
 }
 
 async fn trigger_rescan(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -197,30 +220,36 @@ async fn trigger_rescan(State(state): State<AppState>) -> Json<serde_json::Value
 
     let lib_store = state.library.clone();
     tokio::spawn(async move {
-        let mut all_tracks = Vec::new();
-        let mut all_albums = Vec::new();
-        let mut all_artists = Vec::new();
-        for lib in libraries {
-            if lib.path.exists() {
-                let (tracks, albums, artists) = scan_directory(&lib.path);
-                all_tracks.extend(tracks);
-                all_albums.extend(albums);
-                all_artists.extend(artists);
+        if let Ok((all_tracks, all_albums, all_artists)) = tokio::task::spawn_blocking(move || {
+            let mut all_tracks = Vec::new();
+            let mut all_albums = Vec::new();
+            let mut all_artists = Vec::new();
+            for lib in libraries {
+                if lib.path.exists() {
+                    let (tracks, albums, artists) = scan_directory(&lib.path);
+                    all_tracks.extend(tracks);
+                    all_albums.extend(albums);
+                    all_artists.extend(artists);
+                }
             }
-        }
-        let mut store = lib_store.write().await;
-        store.tracks.clear();
-        store.albums.clear();
-        store.artists.clear();
-        store.cached_tracks_json = None;
-        for t in all_tracks {
-            store.tracks.insert(t.id.clone(), t);
-        }
-        for a in all_albums {
-            store.albums.insert(a.id.clone(), a);
-        }
-        for ar in all_artists {
-            store.artists.insert(ar.id.clone(), ar);
+            (all_tracks, all_albums, all_artists)
+        })
+        .await
+        {
+            let mut store = lib_store.write().await;
+            store.tracks.clear();
+            store.albums.clear();
+            store.artists.clear();
+            store.cached_tracks_json = None;
+            for t in all_tracks {
+                store.tracks.insert(t.id.clone(), t);
+            }
+            for a in all_albums {
+                store.albums.insert(a.id.clone(), a);
+            }
+            for ar in all_artists {
+                store.artists.insert(ar.id.clone(), ar);
+            }
         }
     });
 

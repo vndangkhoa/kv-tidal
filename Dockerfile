@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # =========================================================
 # Stage 1: Build Next.js 15 Static Frontend
 # =========================================================
@@ -5,7 +6,7 @@ FROM node:22-alpine AS frontend-builder
 WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
-RUN npm ci || npm install
+RUN --mount=type=cache,target=/root/.npm npm ci || npm install
 
 COPY frontend/ ./
 RUN npm run build
@@ -18,7 +19,9 @@ WORKDIR /app/backend
 
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/src ./src
-RUN cargo build --release && cp /app/backend/target/release/kv-tidal /app/kv-tidal
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/backend/target \
+    cargo build --release && cp /app/backend/target/release/kv-tidal /app/kv-tidal
 
 # =========================================================
 # Stage 3: Minimal Production Runtime
@@ -29,7 +32,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    ffmpeg \
     libssl3 \
+    nodejs \
     python3 \
     && curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp \

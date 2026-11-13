@@ -853,6 +853,7 @@ async fn scan_path(
         for ar in artists {
             store.artists.insert(ar.id.clone(), ar);
         }
+        store.cached_tracks_json = None;
     }
 
     tracing::info!(
@@ -1418,8 +1419,221 @@ async fn get_cover(
     Err(StatusCode::NOT_FOUND)
 }
 
-pub fn router() -> Router<AppState> {
-    Router::new()
+#[derive(Debug, Deserialize)]
+pub struct VerifyPasscodeRequest {
+    pub passcode: String,
+}
+
+static FAILED_ATTEMPTS: std::sync::OnceLock<tokio::sync::Mutex<(u32, Option<std::time::Instant>)>> =
+    std::sync::OnceLock::new();
+
+fn failed_attempts_mutex() -> &'static tokio::sync::Mutex<(u32, Option<std::time::Instant>)> {
+    FAILED_ATTEMPTS.get_or_init(|| tokio::sync::Mutex::new((0, None)))
+}
+
+pub(crate) fn compute_nas_token(passcode: &str, secret: &str) -> String {
+    let inner = md5::compute(format!("kvtidal-nas-v1:{}:{}", secret, passcode));
+    let outer = md5::compute(format!("{}:{:x}", secret, inner));
+    format!("{:x}{:x}", inner, outer)
+}
+
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let max_len = a.len().max(b.len());
+    let mut diff: u8 = if a.len() == b.len() { 0 } else { 1 };
+    for i in 0..max_len {
+        let ba = if i < a.len() { a[i] } else { 0 };
+        let bb = if i < b.len() { b[i] } else { 0 };
+        diff |= ba ^ bb;
+    }
+    diff == 0
+}
+
+pub(crate) fn extract_nas_token(
+    headers: &axum::http::HeaderMap,
+    query_str: Option<&str>,
+) -> Option<String> {
+    if let Some(val) = headers.get("x-nas-token").and_then(|v| v.to_str().ok()) {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Some(cookie_hdr) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        for part in cookie_hdr.split(';') {
+            let trimmed = part.trim();
+            if let Some(val) = trimmed.strip_prefix("kv_nas_auth=") {
+                if !val.trim().is_empty() {
+                    return Some(val.trim().to_string());
+                }
+            }
+        }
+    }
+
+    if let Some(qs) = query_str {
+        for pair in qs.split('&') {
+            if let Some(val) = pair.strip_prefix("token=") {
+                if !val.trim().is_empty() {
+                    return Some(val.trim().to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+pub(crate) async fn is_request_nas_unlocked(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    query_str: Option<&str>,
+) -> bool {
+    let cfg = state.config.read().await;
+    if !cfg.nas_passcode_enabled {
+        return true;
+    }
+    let expected = compute_nas_token(&cfg.nas_passcode, &cfg.nas_auth_secret);
+    drop(cfg);
+
+    if let Some(tok) = extract_nas_token(headers, query_str) {
+        constant_time_eq(tok.as_bytes(), expected.as_bytes())
+    } else {
+        false
+    }
+}
+
+async fn get_auth_status(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<serde_json::Value> {
+    let unlocked = is_request_nas_unlocked(&state, &headers, None).await;
+    let cfg = state.config.read().await;
+    Json(serde_json::json!({
+        "enabled": cfg.nas_passcode_enabled,
+        "unlocked": unlocked,
+        "is_default": cfg.nas_passcode == "1234"
+    }))
+}
+
+async fn verify_passcode(
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyPasscodeRequest>,
+) -> Response {
+    {
+        let mut guard = failed_attempts_mutex().lock().await;
+        if let Some(until) = guard.1 {
+            if std::time::Instant::now() < until {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "valid": false,
+                        "error": "Too many incorrect attempts. Please wait 30 seconds."
+                    })),
+                )
+                    .into_response();
+            } else {
+                *guard = (0, None);
+            }
+        }
+    }
+
+    let (enabled, expected_pass, auth_secret) = {
+        let cfg = state.config.read().await;
+        (
+            cfg.nas_passcode_enabled,
+            cfg.nas_passcode.clone(),
+            cfg.nas_auth_secret.clone(),
+        )
+    };
+
+    if !enabled {
+        let token = compute_nas_token(&expected_pass, &auth_secret);
+        return (
+            StatusCode::OK,
+            [(
+                header::SET_COOKIE,
+                format!(
+                    "kv_nas_auth={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200",
+                    token
+                ),
+            )],
+            Json(serde_json::json!({ "valid": true, "token": token })),
+        )
+            .into_response();
+    }
+
+    let submitted = payload.passcode.trim();
+    if constant_time_eq(submitted.as_bytes(), expected_pass.as_bytes()) {
+        {
+            let mut guard = failed_attempts_mutex().lock().await;
+            *guard = (0, None);
+        }
+        let token = compute_nas_token(&expected_pass, &auth_secret);
+        return (
+            StatusCode::OK,
+            [(
+                header::SET_COOKIE,
+                format!(
+                    "kv_nas_auth={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200",
+                    token
+                ),
+            )],
+            Json(serde_json::json!({ "valid": true, "token": token })),
+        )
+            .into_response();
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+    {
+        let mut guard = failed_attempts_mutex().lock().await;
+        guard.0 += 1;
+        if guard.0 >= 6 {
+            guard.1 = Some(std::time::Instant::now() + std::time::Duration::from_secs(30));
+        }
+    }
+
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "valid": false,
+            "error": "Incorrect passcode"
+        })),
+    )
+        .into_response()
+}
+
+async fn lock_nas_folder() -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            "kv_nas_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".to_string(),
+        )],
+        Json(serde_json::json!({ "locked": true })),
+    )
+        .into_response()
+}
+
+async fn require_nas_passcode(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    if is_request_nas_unlocked(&state, req.headers(), req.uri().query()).await {
+        Ok(next.run(req).await)
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "NAS folder is locked. Passcode required.",
+                "locked": true
+            })),
+        ))
+    }
+}
+
+pub fn router(state: AppState) -> Router<AppState> {
+    let protected = Router::new()
         .route("/browse", get(browse_directory))
         .route("/transfer", post(transfer_file))
         .route("/download", get(download_file))
@@ -1432,4 +1646,14 @@ pub fn router() -> Router<AppState> {
         .route("/tags", axum::routing::put(update_tags))
         .route("/organize", post(organize_files))
         .route("/batch-transfer", post(batch_transfer))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state,
+            require_nas_passcode,
+        ));
+
+    Router::new()
+        .route("/auth-status", get(get_auth_status))
+        .route("/verify", post(verify_passcode))
+        .route("/lock", post(lock_nas_folder))
+        .merge(protected)
 }

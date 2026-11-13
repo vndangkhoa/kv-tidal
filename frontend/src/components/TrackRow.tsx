@@ -23,8 +23,8 @@ interface TrackRowProps {
   format?: string;
   drScore?: number;
   isDsd?: boolean;
-  onArtistClick?: (artist: string) => void;
-  onAlbumClick?: (album: string, artist: string, coverUrl?: string) => void;
+  onArtistClick?: (artist: string, coverUrl?: string) => void;
+  onAlbumClick?: (album: string, artist: string, coverUrl?: string, trackId?: string) => void;
   onCoverClick?: () => void;
   queueContext?: PlayableTrack[];
 }
@@ -66,31 +66,54 @@ export const TrackRow = React.memo(function TrackRow({
   const resolvedFormat = format || (hires ? "FLAC" : "MP3");
   const sampleRateKhz = (resolvedSampleRate / 1000).toFixed(1);
 
+  const contextMatch = !streamId ? queueContext?.find((q) => q.title === title && q.artist === artist) : undefined;
+  const resolvedStreamId = (() => {
+    if (streamId) return streamId;
+    if (contextMatch?.streamUrl) {
+      try {
+        const u = new URL(contextMatch.streamUrl, "http://localhost");
+        const qId = u.searchParams.get("id");
+        if (qId) return qId;
+      } catch {}
+    }
+    if (
+      contextMatch?.id &&
+      (contextMatch.id.startsWith("tidal-") || /^\d+$/.test(contextMatch.id))
+    ) {
+      return contextMatch.id;
+    }
+    return undefined;
+  })();
+
+  const buildPlayableTrack = (): PlayableTrack => {
+    let streamUrl = `/api/stream?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`;
+    if (resolvedStreamId) {
+      streamUrl += `&id=${encodeURIComponent(resolvedStreamId)}`;
+    }
+    return {
+      id: resolvedStreamId || contextMatch?.id || `${artist}-${title}`,
+      title,
+      artist,
+      album,
+      coverUrl,
+      streamUrl,
+      duration,
+      bitDepth: resolvedBitDepth,
+      sampleRate: resolvedSampleRate,
+      bitrate,
+      format: resolvedFormat,
+      hires,
+      source,
+      drScore: drScore || (hires ? 12 : 10),
+      isDsd: isDsd || format?.toLowerCase() === "dsf" || format?.toLowerCase() === "dff",
+    };
+  };
+
   const handlePlay = () => {
     if (isCurrent) {
       togglePlay();
     } else {
-      let streamUrl = `/api/stream?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`;
-      if (streamId) {
-        streamUrl += `&id=${encodeURIComponent(streamId)}`;
-      }
-
-      const newTrack: PlayableTrack = {
-        id: streamId || `${artist}-${title}`,
-        title,
-        artist,
-        album,
-        coverUrl,
-        streamUrl,
-        bitDepth: resolvedBitDepth,
-        sampleRate: resolvedSampleRate,
-        bitrate,
-        format: resolvedFormat,
-        hires,
-        source,
-        drScore: drScore || (hires ? 12 : 10),
-        isDsd: isDsd || format?.toLowerCase() === "dsf" || format?.toLowerCase() === "dff",
-      };
+      const newTrack = buildPlayableTrack();
 
       if (queueContext && queueContext.length > 0) {
         playTrack(newTrack, queueContext);
@@ -115,7 +138,7 @@ export const TrackRow = React.memo(function TrackRow({
       duration,
       cover_url: coverUrl,
       stream_url: undefined,
-      track_id: streamId,
+      track_id: resolvedStreamId,
       source: source || "tidal",
     });
   };
@@ -252,7 +275,7 @@ export const TrackRow = React.memo(function TrackRow({
               onClick={(e) => {
                 if (onArtistClick) {
                   e.stopPropagation();
-                  onArtistClick(artist);
+                  onArtistClick(artist, coverUrl);
                 }
               }}
               title={onArtistClick ? `View artist: ${artist}` : undefined}
@@ -274,7 +297,7 @@ export const TrackRow = React.memo(function TrackRow({
           onClick={(e) => {
             if (onAlbumClick) {
               e.stopPropagation();
-              onAlbumClick(album, artist, coverUrl);
+              onAlbumClick(album, artist, coverUrl, streamId);
             }
           }}
           title={onAlbumClick ? `View album: ${album}` : undefined}
@@ -296,24 +319,7 @@ export const TrackRow = React.memo(function TrackRow({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              let streamUrl = `/api/stream?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`;
-              if (streamId) streamUrl += `&id=${encodeURIComponent(streamId)}`;
-              addToQueue({
-                id: streamId || `${artist}-${title}`,
-                title,
-                artist,
-                album,
-                coverUrl,
-                streamUrl,
-                bitDepth: resolvedBitDepth,
-                sampleRate: resolvedSampleRate,
-                bitrate,
-                format: resolvedFormat,
-                hires,
-                source,
-                drScore: drScore || (hires ? 12 : 10),
-                isDsd: isDsd || format?.toLowerCase() === "dsf" || format?.toLowerCase() === "dff",
-              });
+              addToQueue(buildPlayableTrack());
             }}
             title="Add to Up Next Queue"
             className="p-1.5 rounded-full hover:bg-cardHover text-textSecondary opacity-0 group-hover:opacity-100 hover:text-white transition-all cursor-pointer"
@@ -456,24 +462,7 @@ export const TrackRow = React.memo(function TrackRow({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  let streamUrl = `/api/stream?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`;
-                  if (streamId) streamUrl += `&id=${encodeURIComponent(streamId)}`;
-                  addToQueue({
-                    id: streamId || `${artist}-${title}`,
-                    title,
-                    artist,
-                    album,
-                    coverUrl,
-                    streamUrl,
-                    bitDepth: resolvedBitDepth,
-                    sampleRate: resolvedSampleRate,
-                    bitrate,
-                    format: resolvedFormat,
-                    hires,
-                    source,
-                    drScore: drScore || (hires ? 12 : 10),
-                    isDsd: isDsd || format?.toLowerCase() === "dsf" || format?.toLowerCase() === "dff",
-                  });
+                  addToQueue(buildPlayableTrack());
                   setIsMobileMenuOpen(false);
                 }}
                 className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
@@ -522,7 +511,7 @@ export const TrackRow = React.memo(function TrackRow({
               {onAlbumClick && album && (
                 <button
                   onClick={() => {
-                    onAlbumClick(album, artist, coverUrl);
+                    onAlbumClick(album, artist, coverUrl, streamId);
                     setIsMobileMenuOpen(false);
                   }}
                   className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"
@@ -536,7 +525,7 @@ export const TrackRow = React.memo(function TrackRow({
               {onArtistClick && artist && (
                 <button
                   onClick={() => {
-                    onArtistClick(artist);
+                    onArtistClick(artist, coverUrl);
                     setIsMobileMenuOpen(false);
                   }}
                   className="w-full py-3 flex items-center space-x-3 text-textSecondary hover:text-white transition-colors cursor-pointer text-left"

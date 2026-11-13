@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import {
@@ -33,6 +33,38 @@ export function Header() {
   const { activeJobs, setIsManagerOpen } = useDownloads();
 
   const [telemetryBitrate, setTelemetryBitrate] = useState<number>(0);
+  const [headerQuery, setHeaderQuery] = useState<string>("");
+  const headerInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (pathname === "/search" || pathname === "/search/") return;
+    const handleQuickFocus = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      const tag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k")) {
+        e.preventDefault();
+        headerInputRef.current?.focus();
+        headerInputRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", handleQuickFocus);
+    return () => window.removeEventListener("keydown", handleQuickFocus);
+  }, [pathname]);
+
+  const handleHeaderSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = headerQuery.trim();
+    if (trimmed) {
+      try {
+        sessionStorage.setItem("kvtidal_pending_search", trimmed);
+      } catch {}
+      setHeaderQuery("");
+      router.push(`/search/?q=${encodeURIComponent(trimmed)}`);
+    } else {
+      router.push("/search/");
+    }
+  };
 
   useEffect(() => {
     const handleScroll = (e: Event) => {
@@ -111,13 +143,37 @@ export function Header() {
         {/* Center: Desktop Global Quick Search (shown when not on /search) */}
         <div className="hidden md:flex flex-1 max-w-md mx-6">
           {pathname !== "/search" && pathname !== "/search/" && (
-            <Link
-              href="/search/"
-              className="w-full flex items-center space-x-3 bg-card/80 hover:bg-card border border-border hover:border-borderHover rounded-full px-4 py-2 text-xs text-textSecondary hover:text-white transition-all shadow-sm group"
+            <form
+              onSubmit={handleHeaderSearchSubmit}
+              className="w-full relative flex items-center bg-card/80 hover:bg-card focus-within:bg-card border border-border hover:border-borderHover focus-within:border-primary rounded-full px-3.5 py-1.5 text-xs shadow-sm transition-all group"
             >
-              <Search className="w-4 h-4 text-textSecondary group-hover:text-primary transition-colors" />
-              <span>Search songs, artists, albums, or NAS files...</span>
-            </Link>
+              <Search className="w-4 h-4 text-textSecondary group-focus-within:text-primary transition-colors flex-shrink-0 mr-2.5" />
+              <input
+                ref={headerInputRef}
+                type="text"
+                value={headerQuery}
+                onChange={(e) => setHeaderQuery(e.target.value)}
+                placeholder="Search songs, artists, albums, or NAS files..."
+                className="w-full bg-transparent text-xs text-textPrimary placeholder-textSecondary/70 focus:outline-none pr-12"
+              />
+              {headerQuery.trim() ? (
+                <button
+                  type="submit"
+                  className="absolute right-1.5 px-2.5 py-0.5 rounded-full bg-primary text-black text-[10px] font-bold hover:brightness-110 cursor-pointer"
+                >
+                  Go
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => router.push("/search/")}
+                  className="absolute right-2.5 text-[10px] font-mono text-textSecondary/60 bg-surface/80 px-1.5 py-0.5 rounded border border-border/70 hover:text-white cursor-pointer"
+                  title="Open Search Page (/)"
+                >
+                  ⌘K
+                </button>
+              )}
+            </form>
           )}
         </div>
 

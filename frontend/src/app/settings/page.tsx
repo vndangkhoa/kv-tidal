@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { MappedFolder } from "@/types";
 import {
   Settings,
@@ -10,6 +10,11 @@ import {
   Speaker,
   Activity,
   CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  Copy,
+  Check,
+  X,
   Cpu,
   Sliders,
   Disc,
@@ -23,6 +28,7 @@ import {
   Lock,
   Eye,
   EyeOff,
+  KeyRound,
 } from "lucide-react";
 import { usePlayer } from "@/context/PlayerContext";
 
@@ -87,6 +93,34 @@ export default function SettingsPage() {
   const [testingTidal, setTestingTidal] = useState(false);
   const [tidalStatusMsg, setTidalStatusMsg] = useState<{ success: boolean; text: string } | null>(null);
 
+  // Tidal OAuth2 Device Authorization Flow State
+  const [tidalDeviceAuth, setTidalDeviceAuth] = useState<{
+    device_code: string;
+    user_code: string;
+    verification_uri: string;
+    expires_in: number;
+    interval: number;
+    expiresAt: number;
+  } | null>(null);
+  const [startingDeviceAuth, setStartingDeviceAuth] = useState(false);
+  const [copiedUserCode, setCopiedUserCode] = useState(false);
+  const devicePollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isPollingInFlightRef = useRef<boolean>(false);
+
+  const stopTidalDevicePolling = useCallback(() => {
+    if (devicePollTimerRef.current) {
+      clearInterval(devicePollTimerRef.current);
+      devicePollTimerRef.current = null;
+    }
+    isPollingInFlightRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopTidalDevicePolling();
+    };
+  }, [stopTidalDevicePolling]);
+
   // Soulseek Lossless Engine State
   const [soulseekEnabled, setSoulseekEnabled] = useState(true);
   const [soulseekUrl, setSoulseekUrl] = useState("http://127.0.0.1:5030");
@@ -98,6 +132,23 @@ export default function SettingsPage() {
   const [showSoulseekPassword, setShowSoulseekPassword] = useState(false);
   const [testingSoulseek, setTestingSoulseek] = useState(false);
   const [soulseekStatusMsg, setSoulseekStatusMsg] = useState<{ success: boolean; text: string; version?: string } | null>(null);
+
+  // YouTube / Web Stream Cookies (cookies.txt) State
+  const [youtubeHasCookies, setYoutubeHasCookies] = useState(false);
+  const [ytdlpAvailable, setYtdlpAvailable] = useState(false);
+  const [youtubeCookiesContent, setYoutubeCookiesContent] = useState("");
+  const [savingCookies, setSavingCookies] = useState(false);
+  const [cookiesStatusMsg, setCookiesStatusMsg] = useState<{ success: boolean; text: string } | null>(null);
+  const cookiesFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // NAS Folder Passcode Lock State
+  const [nasPasscodeEnabled, setNasPasscodeEnabled] = useState<boolean>(true);
+  const [nasPasscodeIsDefault, setNasPasscodeIsDefault] = useState<boolean>(false);
+  const [currentNasPasscode, setCurrentNasPasscode] = useState<string>("");
+  const [newNasPasscode, setNewNasPasscode] = useState<string>("");
+  const [savingPasscode, setSavingPasscode] = useState<boolean>(false);
+  const [passcodeMsg, setPasscodeMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [sharePasscode, setSharePasscode] = useState<string>("");
 
   const fetchSettings = async () => {
     try {
@@ -120,6 +171,12 @@ export default function SettingsPage() {
         setSoulseekHasApiKey(sdata.soulseek_has_api_key);
         if (sdata.soulseek_username) setSoulseekUsername(sdata.soulseek_username);
         setSoulseekHasPassword(!!sdata.soulseek_has_password);
+        setYoutubeHasCookies(!!sdata.youtube_has_cookies);
+        setYtdlpAvailable(!!sdata.ytdlp_available);
+        setNasPasscodeEnabled(
+          sdata.nas_passcode_enabled !== undefined ? Boolean(sdata.nas_passcode_enabled) : true
+        );
+        setNasPasscodeIsDefault(Boolean(sdata.nas_passcode_is_default));
       }
 
       // Automatically check live Soulseek P2P connection
@@ -136,6 +193,112 @@ export default function SettingsPage() {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleStartTidalDeviceAuth = async () => {
+    stopTidalDevicePolling();
+    setStartingDeviceAuth(true);
+    setTidalStatusMsg(null);
+    setCopiedUserCode(false);
+
+    try {
+      const resp = await fetch("/api/settings/tidal/device-auth", {
+        method: "POST",
+      });
+      if (!resp.ok) {
+        let errMsg = `Failed to start Tidal device login (HTTP ${resp.status})`;
+        try {
+          const errJson = await resp.json();
+          if (errJson?.message || errJson?.error) {
+            errMsg = errJson.message || errJson.error;
+          }
+        } catch {
+          const txt = await resp.text().catch(() => "");
+          if (txt) errMsg = txt;
+        }
+        setTidalStatusMsg({ success: false, text: errMsg });
+        return;
+      }
+
+      const data = await resp.json();
+      const expiresIn = data.expires_in || 300;
+      const pollIntervalSec = data.interval || 5;
+      const expiresAt = Date.now() + expiresIn * 1000;
+
+      const authData = {
+        device_code: data.device_code,
+        user_code: data.user_code,
+        verification_uri: data.verification_uri_complete || data.verification_uri,
+        expires_in: expiresIn,
+        interval: pollIntervalSec,
+        expiresAt,
+      };
+      setTidalDeviceAuth(authData);
+
+      devicePollTimerRef.current = setInterval(async () => {
+        if (Date.now() >= expiresAt) {
+          stopTidalDevicePolling();
+          setTidalDeviceAuth(null);
+          setTidalStatusMsg({
+            success: false,
+            text: "Tidal device authorization code expired. Please initiate login again.",
+          });
+          return;
+        }
+        if (isPollingInFlightRef.current) return;
+        isPollingInFlightRef.current = true;
+
+        try {
+          const pollResp = await fetch("/api/settings/tidal/device-poll", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device_code: authData.device_code }),
+          });
+          const pollData = await pollResp
+            .json()
+            .catch(() => ({ status: "error", message: `HTTP ${pollResp.status}` }));
+
+          if (pollData.status === "authorized") {
+            stopTidalDevicePolling();
+            setTidalDeviceAuth(null);
+            if (pollData.tidal_token_masked) {
+              setTidalTokenMasked(pollData.tidal_token_masked);
+              setTidalHasToken(true);
+            }
+            setTidalStatusMsg({
+              success: true,
+              text:
+                pollData.message ||
+                "Tidal HiFi account connected! Direct Master FLAC streaming is now active.",
+            });
+            fetchSettings();
+          } else if (pollData.status === "error") {
+            stopTidalDevicePolling();
+            setTidalDeviceAuth(null);
+            setTidalStatusMsg({
+              success: false,
+              text: pollData.message || "Tidal device authorization failed.",
+            });
+          }
+        } catch {
+          // Ignore transient network errors while polling until expiry or cancel
+        } finally {
+          isPollingInFlightRef.current = false;
+        }
+      }, pollIntervalSec * 1000);
+    } catch (e: any) {
+      setTidalStatusMsg({
+        success: false,
+        text: e.message || "Failed starting Tidal device authorization",
+      });
+    } finally {
+      setStartingDeviceAuth(false);
+    }
+  };
+
+  const handleCancelTidalDeviceAuth = () => {
+    stopTidalDevicePolling();
+    setTidalDeviceAuth(null);
   };
 
   const handleSaveTidal = async (e: React.FormEvent) => {
@@ -206,6 +369,89 @@ export default function SettingsPage() {
     }
   };
 
+  const handleCookiesFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setYoutubeCookiesContent(text);
+      setCookiesStatusMsg({
+        success: true,
+        text: `Loaded ${file.name} (${text.length.toLocaleString()} bytes). Click "Save & Verify Cookies" to apply.`,
+      });
+    } catch {
+      setCookiesStatusMsg({
+        success: false,
+        text: "Failed to read selected cookies.txt file.",
+      });
+    } finally {
+      if (cookiesFileInputRef.current) {
+        cookiesFileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handleSaveYoutubeCookies = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingCookies(true);
+    setCookiesStatusMsg(null);
+    try {
+      if (youtubeCookiesContent.trim()) {
+        const saveResp = await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            youtube_cookies_content: youtubeCookiesContent,
+          }),
+        });
+        if (!saveResp.ok) {
+          const errText = await saveResp.text();
+          throw new Error(errText || `HTTP ${saveResp.status}`);
+        }
+      }
+      const testResp = await fetch("/api/settings/test-ytdlp", { method: "POST" });
+      const testData = await testResp.json();
+      setYoutubeHasCookies(!!testData.has_cookies);
+      setYtdlpAvailable(!!testData.ytdlp_available);
+      setCookiesStatusMsg({
+        success: !!testData.success,
+        text: testData.message || "Verified yt-dlp and cookies status.",
+      });
+      setYoutubeCookiesContent("");
+      fetchSettings();
+    } catch (e: any) {
+      setCookiesStatusMsg({
+        success: false,
+        text: e.message || "Failed saving YouTube cookies.txt",
+      });
+    } finally {
+      setSavingCookies(false);
+    }
+  };
+
+  const handleClearYoutubeCookies = async () => {
+    setSavingCookies(true);
+    setCookiesStatusMsg(null);
+    try {
+      const resp = await fetch("/api/settings/clear-cookies", { method: "POST" });
+      const data = await resp.json();
+      setYoutubeHasCookies(false);
+      setYoutubeCookiesContent("");
+      setCookiesStatusMsg({
+        success: true,
+        text: data.message || "YouTube cookies.txt cleared.",
+      });
+      fetchSettings();
+    } catch (e: any) {
+      setCookiesStatusMsg({
+        success: false,
+        text: e.message || "Failed clearing cookies.txt",
+      });
+    } finally {
+      setSavingCookies(false);
+    }
+  };
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       setServerHost(window.location.hostname);
@@ -213,6 +459,41 @@ export default function SettingsPage() {
     }
     fetchSettings();
   }, []);
+
+  const handleSaveNasPasscode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingPasscode(true);
+    setPasscodeMsg(null);
+    try {
+      const resp = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nas_passcode_enabled: nasPasscodeEnabled,
+          current_nas_passcode: currentNasPasscode.trim() || undefined,
+          new_nas_passcode: newNasPasscode.trim() || undefined,
+        }),
+      });
+      if (resp.ok) {
+        setCurrentNasPasscode("");
+        setNewNasPasscode("");
+        setPasscodeMsg({
+          type: "ok",
+          text: nasPasscodeEnabled
+            ? "NAS folder passcode updated cleanly."
+            : "NAS folder passcode protection disabled.",
+        });
+        await fetchSettings();
+      } else {
+        const errText = await resp.text().catch(() => "Failed updating passcode");
+        setPasscodeMsg({ type: "err", text: errText || `Error (HTTP ${resp.status})` });
+      }
+    } catch (err: any) {
+      setPasscodeMsg({ type: "err", text: err?.message || "Connection error" });
+    } finally {
+      setSavingPasscode(false);
+    }
+  };
 
   const handleAddFolder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,15 +508,20 @@ export default function SettingsPage() {
           name: newName.trim() || newPath.split("/").pop() || "Music Folder",
           path: newPath.trim(),
           is_download_target: isDownloadTarget,
+          passcode: sharePasscode.trim() || currentNasPasscode.trim() || undefined,
         }),
       });
 
       if (resp.ok) {
         setNewPath("");
         setNewName("");
+        setSharePasscode("");
         setIsDownloadTarget(false);
         await fetchSettings();
         alert("NAS library path mapped successfully! Background scan started.");
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        alert(err.error || `Failed adding library folder (HTTP ${resp.status})`);
       }
     } catch (err) {
       alert("Failed adding library folder");
@@ -720,11 +1006,104 @@ export default function SettingsPage() {
             </span>
           </div>
 
+          {/* 1-Click OAuth2 Device Login Action & Inline Verification Panel */}
+          <div className="bg-card/60 border border-border rounded-xl p-3.5 sm:p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold text-white flex items-center space-x-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>1-Click OAuth2 Device Authorization</span>
+                </div>
+                <p className="text-[11px] text-textSecondary mt-0.5">
+                  Link your Tidal HiFi Plus account directly via <code className="text-amber-400 font-mono">link.tidal.com</code> without manually copying tokens.
+                </p>
+              </div>
+              {!tidalDeviceAuth && (
+                <button
+                  type="button"
+                  onClick={handleStartTidalDeviceAuth}
+                  disabled={startingDeviceAuth}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold text-xs rounded-xl transition-all shadow-md flex items-center justify-center space-x-1.5 cursor-pointer flex-shrink-0"
+                >
+                  {startingDeviceAuth ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  )}
+                  <span>Connect Tidal Account (Device Login)</span>
+                </button>
+              )}
+            </div>
+
+            {tidalDeviceAuth && (() => {
+              const fullVerificationUrl = tidalDeviceAuth.verification_uri.startsWith("http")
+                ? tidalDeviceAuth.verification_uri
+                : `https://${tidalDeviceAuth.verification_uri}`;
+              return (
+                <div className="p-3.5 sm:p-4 rounded-xl bg-surface border border-amber-500/40 space-y-3 animate-in fade-in duration-200">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-textSecondary block">
+                        Verification Code
+                      </span>
+                      <div className="flex items-center space-x-2">
+                        <span className="px-3 py-1.5 rounded-lg bg-black/60 border border-amber-500/40 font-mono text-base sm:text-lg font-extrabold tracking-[0.2em] text-amber-300 select-all">
+                          {tidalDeviceAuth.user_code}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(tidalDeviceAuth.user_code);
+                            setCopiedUserCode(true);
+                            setTimeout(() => setCopiedUserCode(false), 2000);
+                          }}
+                          title="Copy verification code"
+                          className="p-2 rounded-lg bg-card border border-border hover:border-amber-400 text-textSecondary hover:text-white transition-colors cursor-pointer"
+                        >
+                          {copiedUserCode ? (
+                            <Check className="w-4 h-4 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <a
+                        href={fullVerificationUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md cursor-pointer"
+                      >
+                        <span>Open Tidal Activation Page</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={handleCancelTidalDeviceAuth}
+                        className="px-3 py-2 rounded-xl bg-card hover:bg-cardHover border border-border text-textSecondary hover:text-white text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Cancel</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2 pt-2 border-t border-border/50 text-xs font-mono text-amber-300/90">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400 flex-shrink-0" />
+                    <span>Waiting for authorization on link.tidal.com...</span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
           <form onSubmit={handleSaveTidal} className="space-y-4 pt-1">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="md:col-span-2 space-y-1.5">
                 <label className="text-xs font-semibold text-textSecondary flex items-center justify-between">
-                  <span>Tidal Session Bearer Token / OAuth Token</span>
+                  <span>Manual Session Bearer Token / OAuth Token</span>
                   {tidalTokenMasked && (
                     <span className="text-[11px] font-mono text-amber-400 font-normal">
                       Configured: {tidalTokenMasked}
@@ -769,7 +1148,11 @@ export default function SettingsPage() {
                   ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
                   : "bg-red-500/10 border-red-500/30 text-red-400"
               }`}>
-                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                {tidalStatusMsg.success ? (
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                )}
                 <span>{tidalStatusMsg.text}</span>
               </div>
             )}
@@ -921,6 +1304,112 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* 3. YouTube / Web Stream Cookies (cookies.txt) */}
+      {(activeCategory === "all" || activeCategory === "streaming") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <ShieldCheck className="w-5 h-5 text-cyan-400 flex-shrink-0" />
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-textPrimary">YouTube / Web Stream Cookies (cookies.txt)</h2>
+                <p className="text-xs text-textSecondary mt-0.5">
+                  Optional Netscape <code className="text-cyan-400 font-mono">cookies.txt</code> for <code className="text-cyan-400 font-mono">yt-dlp</code> fallback stream resolution when YouTube enforces bot or age verification on NAS IPs.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2 self-start sm:self-auto">
+              <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold border ${
+                youtubeHasCookies
+                  ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                  : "bg-card text-textSecondary border-border"
+              }`}>
+                {youtubeHasCookies ? "COOKIES ACTIVE" : "NO COOKIES"}
+              </span>
+              {ytdlpAvailable && (
+                <span className="px-2 py-1 rounded text-[11px] font-mono font-bold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                  YT-DLP READY
+                </span>
+              )}
+            </div>
+          </div>
+
+          <form onSubmit={handleSaveYoutubeCookies} className="space-y-3 pt-1">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="text-xs font-semibold text-textSecondary">
+                Paste Netscape <code className="font-mono text-cyan-400">cookies.txt</code> Content or Upload <code className="font-mono text-cyan-400">.txt</code> File
+              </label>
+              <div className="flex items-center space-x-2">
+                <input
+                  ref={cookiesFileInputRef}
+                  type="file"
+                  accept=".txt,text/plain"
+                  onChange={handleCookiesFileUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => cookiesFileInputRef.current?.click()}
+                  className="px-3 py-1.5 rounded-lg bg-card hover:bg-cardHover border border-border hover:border-cyan-400/50 text-xs font-semibold text-textPrimary transition-colors cursor-pointer"
+                >
+                  Upload cookies.txt File
+                </button>
+                {youtubeHasCookies && (
+                  <button
+                    type="button"
+                    onClick={handleClearYoutubeCookies}
+                    disabled={savingCookies}
+                    className="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-xs font-semibold text-red-400 transition-colors cursor-pointer"
+                  >
+                    Clear Cookies
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <textarea
+              rows={4}
+              value={youtubeCookiesContent}
+              onChange={(e) => setYoutubeCookiesContent(e.target.value)}
+              placeholder={
+                youtubeHasCookies
+                  ? "# Netscape HTTP Cookie File (already configured — paste new content to overwrite or leave blank to test yt-dlp)"
+                  : "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t..."
+              }
+              className="w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-cyan-400 text-xs font-mono text-white placeholder-textSecondary/50 outline-none resize-y"
+            />
+
+            {cookiesStatusMsg && (
+              <div className={`p-3 rounded-xl border text-xs font-mono flex items-center space-x-2 ${
+                cookiesStatusMsg.success
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                  : "bg-amber-500/10 border-amber-500/30 text-amber-400"
+              }`}>
+                {cookiesStatusMsg.success ? (
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                )}
+                <span>{cookiesStatusMsg.text}</span>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+              <span className="text-[11px] text-textSecondary">
+                Saved to <code className="text-cyan-400 font-mono">data/cookies.txt</code> and automatically passed to <code className="text-cyan-400 font-mono">yt-dlp --cookies</code>.
+              </span>
+              <button
+                type="submit"
+                disabled={savingCookies}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black font-semibold text-xs rounded-xl transition-all shadow-md flex items-center justify-center space-x-1.5 cursor-pointer"
+              >
+                {savingCookies && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>{youtubeCookiesContent.trim() ? "Save & Verify Cookies" : "Verify yt-dlp & Cookies"}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Mapped Music Folders Section */}
       {(activeCategory === "all" || activeCategory === "storage") && (
         <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4">
@@ -987,15 +1476,26 @@ export default function SettingsPage() {
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-              <label className="flex items-center space-x-2 text-xs text-textSecondary cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isDownloadTarget}
-                  onChange={(e) => setIsDownloadTarget(e.target.checked)}
-                  className="rounded border-border text-primary focus:ring-primary"
-                />
-                <span>Set as default target directory for high-res rips & DSD downloads</span>
-              </label>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <label className="flex items-center space-x-2 text-xs text-textSecondary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isDownloadTarget}
+                    onChange={(e) => setIsDownloadTarget(e.target.checked)}
+                    className="rounded border-border text-primary focus:ring-primary"
+                  />
+                  <span>Set as default target directory for high-res rips & DSD downloads</span>
+                </label>
+                {nasPasscodeEnabled && (
+                  <input
+                    type="password"
+                    placeholder="NAS Passcode (if locked)"
+                    value={sharePasscode}
+                    onChange={(e) => setSharePasscode(e.target.value)}
+                    className="bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-textPrimary font-mono placeholder-textSecondary/50 focus:outline-none focus:border-primary w-44"
+                  />
+                )}
+              </div>
 
               <button
                 type="submit"
@@ -1004,6 +1504,100 @@ export default function SettingsPage() {
               >
                 <FolderPlus className="w-4 h-4" />
                 <span>Map NAS Share</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* NAS Folder Passcode Protection Card */}
+      {(activeCategory === "all" || activeCategory === "storage") && (
+        <div className="bg-surface border border-border p-4 sm:p-6 rounded-xl sm:rounded-2xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center space-x-3">
+              <KeyRound className="w-5 h-5 text-amber-400 flex-shrink-0" />
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-textPrimary">NAS Folder Passcode Protection</h2>
+                <p className="text-xs text-textSecondary mt-0.5">
+                  Require a simple passcode before viewing or managing raw files in the <code className="text-primary font-mono">NAS Files</code> tab.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2 flex-shrink-0">
+              {nasPasscodeEnabled && nasPasscodeIsDefault && (
+                <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded">
+                  DEFAULT PIN
+                </span>
+              )}
+              <span
+                className={`px-2.5 py-0.5 text-[10px] font-mono font-bold rounded border ${
+                  nasPasscodeEnabled
+                    ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                    : "bg-card text-textSecondary border-border"
+                }`}
+              >
+                {nasPasscodeEnabled ? "LOCK ACTIVE" : "DISABLED"}
+              </span>
+            </div>
+          </div>
+
+          <form onSubmit={handleSaveNasPasscode} className="space-y-3 pt-1">
+            <label className="flex items-center space-x-2.5 text-xs text-textPrimary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={nasPasscodeEnabled}
+                onChange={(e) => setNasPasscodeEnabled(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary"
+              />
+              <span>Require passcode to view / manage the Synology NAS Folder explorer</span>
+            </label>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input
+                type="password"
+                placeholder="Current Passcode (required to change)"
+                value={currentNasPasscode}
+                onChange={(e) => setCurrentNasPasscode(e.target.value)}
+                className="bg-card border border-border rounded-xl px-3 py-2 text-sm text-textPrimary font-mono placeholder-textSecondary/50 focus:outline-none focus:border-primary"
+              />
+              <input
+                type="password"
+                placeholder="New Passcode (4–32 chars, optional)"
+                value={newNasPasscode}
+                onChange={(e) => setNewNasPasscode(e.target.value)}
+                className="bg-card border border-border rounded-xl px-3 py-2 text-sm text-textPrimary font-mono placeholder-textSecondary/50 focus:outline-none focus:border-primary"
+              />
+            </div>
+
+            {passcodeMsg && (
+              <div
+                className={`flex items-center space-x-2 p-2.5 rounded-xl border text-xs ${
+                  passcodeMsg.type === "ok"
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                    : "bg-rose-500/10 border-rose-500/30 text-rose-400"
+                }`}
+              >
+                {passcodeMsg.type === "ok" ? (
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                )}
+                <span>{passcodeMsg.text}</span>
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={savingPasscode}
+                className="flex items-center space-x-1.5 px-4 py-2 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-black font-bold rounded-lg text-xs transition-colors shadow-md cursor-pointer"
+              >
+                {savingPasscode ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5" />
+                )}
+                <span>Save NAS Passcode</span>
               </button>
             </div>
           </form>

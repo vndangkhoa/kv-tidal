@@ -1,13 +1,13 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { usePlayer } from "@/context/PlayerContext";
+import { usePlayer, usePlayerProgress } from "@/context/PlayerContext";
 import { X, Mic2, AlignLeft, RefreshCw, Sparkles, Music } from "lucide-react";
 
 export function LyricsModal() {
+  const { progress } = usePlayerProgress();
   const {
     currentTrack,
-    progress,
     seek,
     lyrics,
     isLoadingLyrics,

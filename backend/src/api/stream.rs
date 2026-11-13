@@ -1,7 +1,7 @@
 use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use serde::Deserialize;
@@ -122,6 +122,9 @@ async fn handle_stream(
                         dr_score: Some(13),
                         hires: true,
                         is_dsd,
+                        title_norm: String::new(),
+                        artist_norm: String::new(),
+                        album_norm: String::new(),
                     })
                 } else {
                     None
@@ -150,85 +153,123 @@ async fn handle_stream(
         }
     };
 
-        // Quick fallback check on disk in download/library directories if not yet indexed in memory
-        if local_track.is_none() && !title.is_empty() {
-            let target_dir = {
-                let cfg = state.config.read().await;
-                cfg.download_dir.clone()
-            };
-            let search_dir = PathBuf::from(&target_dir);
-            if search_dir.exists() {
-                if let Ok(entries) = std::fs::read_dir(&search_dir) {
-                    let title_lower = title.to_lowercase();
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            if let Ok(sub_entries) = std::fs::read_dir(&path) {
-                                for sub_entry in sub_entries.flatten() {
-                                    let sub_path = sub_entry.path();
-                                    if sub_path.is_file() {
-                                        let ext = sub_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                                        if ext == "flac" {
-                                            let file_name = sub_path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                                            if file_name.contains(&title_lower) {
-                                                local_track = Some(crate::storage::scanner::LibraryTrack {
-                                                    id: format!("{:x}", md5::compute(sub_path.to_string_lossy().as_bytes())),
-                                                    title: title.to_string(),
-                                                    artist: artist.to_string(),
-                                                    album: "Lossless Storage".to_string(),
-                                                    duration: 0,
-                                                    track_number: 1,
-                                                    file_path: sub_path,
-                                                    format: "flac".to_string(),
-                                                    bit_depth: Some(24),
-                                                    sample_rate: Some(44100),
-                                                    bitrate: Some(1411),
-                                                    channels: Some(2),
-                                                    year: None,
-                                                    dr_score: Some(12),
-                                                    hires: true,
-                                                    is_dsd: false,
-                                                });
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else if path.is_file() {
-                            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                            if ext == "flac" {
-                                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                                if file_name.contains(&title_lower) {
-                                    local_track = Some(crate::storage::scanner::LibraryTrack {
-                                        id: format!("{:x}", md5::compute(path.to_string_lossy().as_bytes())),
-                                        title: title.to_string(),
-                                        artist: artist.to_string(),
-                                        album: "Lossless Storage".to_string(),
-                                        duration: 0,
-                                        track_number: 1,
-                                        file_path: path,
-                                        format: "flac".to_string(),
-                                        bit_depth: Some(24),
-                                        sample_rate: Some(44100),
-                                        bitrate: Some(1411),
-                                        channels: Some(2),
-                                        year: None,
-                                        dr_score: Some(12),
-                                        hires: true,
-                                        is_dsd: false,
-                                    });
-                                    break;
-                                }
-                            }
+    // Quick fallback check on disk in download/library directories if not yet indexed in memory
+    if local_track.is_none() && !force_opus && !title.is_empty() {
+        let target_dir = {
+            let cfg = state.config.read().await;
+            cfg.download_dir.clone()
+        };
+        let search_dir = PathBuf::from(&target_dir);
+        if search_dir.exists() {
+            let title_lower = title.to_lowercase();
+            let sanitized_title_lower = crate::storage::atomic::sanitize_name(title).to_lowercase();
+            let artist_lower = artist.to_lowercase();
+            let primary_artist_lower =
+                crate::engines::stream_resolver::extract_primary_artist(artist).to_lowercase();
+            let sanitized_artist_lower =
+                crate::storage::atomic::sanitize_name(&primary_artist_lower).to_lowercase();
+
+            // Walk up to 2 directory levels (Artist/Album/Track.flac as well as Artist/Track.flac and Track.flac)
+            for entry in walkdir::WalkDir::new(&search_dir)
+                .max_depth(3)
+                .into_iter()
+                .filter_entry(|e| {
+                    e.depth() == 0
+                        || !e
+                            .file_name()
+                            .to_str()
+                            .map(|s| s.starts_with('.'))
+                            .unwrap_or(false)
+                })
+                .flatten()
+            {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if ext != "flac" {
+                    continue;
+                }
+
+                let file_name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let title_matched = file_name.contains(&title_lower)
+                    || (!sanitized_title_lower.is_empty()
+                        && file_name.contains(&sanitized_title_lower));
+                if !title_matched {
+                    continue;
+                }
+
+                if !artist_lower.is_empty() {
+                    let parent_opt = path.parent().filter(|p| *p != search_dir);
+                    let grandparent_opt = parent_opt
+                        .and_then(|p| p.parent())
+                        .filter(|gp| *gp != search_dir);
+
+                    let parent_name = parent_opt
+                        .and_then(|p| p.file_name())
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let grandparent_name = grandparent_opt
+                        .and_then(|p| p.file_name())
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+
+                    let matches_artist = |haystack: &str| -> bool {
+                        if haystack.is_empty() {
+                            return false;
                         }
-                        if local_track.is_some() {
-                            break;
-                        }
+                        haystack.contains(&artist_lower)
+                            || (!primary_artist_lower.is_empty()
+                                && haystack.contains(&primary_artist_lower))
+                            || (!sanitized_artist_lower.is_empty()
+                                && sanitized_artist_lower != "unknown"
+                                && haystack.contains(&sanitized_artist_lower))
+                    };
+
+                    if !matches_artist(&parent_name)
+                        && !matches_artist(&grandparent_name)
+                        && !matches_artist(&file_name)
+                    {
+                        continue;
                     }
                 }
+
+                local_track = Some(crate::storage::scanner::LibraryTrack {
+                    id: format!("{:x}", md5::compute(path.to_string_lossy().as_bytes())),
+                    title: title.to_string(),
+                    artist: artist.to_string(),
+                    album: "Lossless Storage".to_string(),
+                    duration: 0,
+                    track_number: 1,
+                    file_path: path.to_path_buf(),
+                    format: "flac".to_string(),
+                    bit_depth: Some(24),
+                    sample_rate: Some(44100),
+                    bitrate: Some(1411),
+                    channels: Some(2),
+                    year: None,
+                    dr_score: Some(12),
+                    hires: true,
+                    is_dsd: false,
+                    title_norm: String::new(),
+                    artist_norm: String::new(),
+                    album_norm: String::new(),
+                });
+                break;
             }
         }
+    }
 
     if let Some(track) = local_track {
         // Ensure file exists and is not 0 bytes (corrupted download)
@@ -397,58 +438,128 @@ async fn handle_stream(
         }
     }
 
-    // Direct Tidal Stream Resolution if track_id is provided and !force_opus
+    let is_head = req.method() == axum::http::Method::HEAD;
+    let client_range = req
+        .headers()
+        .get(axum::http::header::RANGE)
+        .and_then(|r| r.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Direct Tidal Stream Resolution when Tidal user token is active and !force_opus
     if !force_opus {
-        if let Some(id) = &query.id {
-            let clean_id = id.trim_start_matches("tidal-");
-            if !clean_id.is_empty() && clean_id.chars().all(|c| c.is_ascii_digit()) {
-                if let Ok(tidal_stream) = state.tidal.resolve_stream_url(clean_id, None).await {
-                    return proxy_stream_with_meta(
-                        &tidal_stream,
-                        req,
-                        "tidal-direct-hifi",
-                        "FLAC (Tidal Master)",
-                        Some(24),
-                        Some(96000),
-                        Some(2500),
-                        true,
-                    ).await;
+        if let Some(tidal_stream) =
+            resolve_tidal_for_request(&state, query.id.as_deref(), artist, title).await
+        {
+            let is_lossless = tidal_stream.format_label.to_uppercase().contains("FLAC");
+            let bitrate = if is_lossless {
+                if tidal_stream.bit_depth > 16 {
+                    Some(2500)
+                } else {
+                    Some(1411)
+                }
+            } else {
+                Some(320)
+            };
+            if let Ok(res) = try_proxy_stream_with_meta(
+                &tidal_stream.url,
+                is_head,
+                client_range.as_deref(),
+                "tidal-direct-hifi",
+                &tidal_stream.format_label,
+                Some(tidal_stream.bit_depth),
+                Some(tidal_stream.sample_rate),
+                bitrate,
+                is_lossless,
+            )
+            .await
+            {
+                return res;
+            }
+        }
+    }
+
+    // 2. Resolve 100% full-length song stream (Invidious / Monochrome 320kbps AAC / yt-dlp)
+    if !title.is_empty() {
+        if let Some(resolved) = state.resolver.resolve_full_stream_meta(artist, title).await {
+            let is_lossless = resolved.format_label.to_uppercase().contains("FLAC");
+            match try_proxy_stream_with_meta(
+                &resolved.url,
+                is_head,
+                client_range.as_deref(),
+                &resolved.source,
+                &resolved.format_label,
+                Some(resolved.bit_depth),
+                Some(resolved.sample_rate),
+                Some(resolved.bitrate),
+                is_lossless,
+            )
+            .await
+            {
+                Ok(res) => return res,
+                Err(status) => {
+                    tracing::warn!(
+                        "Cached/resolved stream failed ({}) for '{} - {}' via {}; invalidating cache and retrying once",
+                        status,
+                        artist,
+                        title,
+                        resolved.source
+                    );
+                    state.resolver.invalidate(artist, title).await;
+                    if let Some(retry_resolved) =
+                        state.resolver.resolve_full_stream_meta(artist, title).await
+                    {
+                        let retry_lossless =
+                            retry_resolved.format_label.to_uppercase().contains("FLAC");
+                        if let Ok(res) = try_proxy_stream_with_meta(
+                            &retry_resolved.url,
+                            is_head,
+                            client_range.as_deref(),
+                            &retry_resolved.source,
+                            &retry_resolved.format_label,
+                            Some(retry_resolved.bit_depth),
+                            Some(retry_resolved.sample_rate),
+                            Some(retry_resolved.bitrate),
+                            retry_lossless,
+                        )
+                        .await
+                        {
+                            return res;
+                        }
+                    }
                 }
             }
         }
     }
 
-    // 2. Resolve 100% full-length song stream (Invidious / yt-dlp)
-    if !title.is_empty() {
-        if let Some(full_stream_url) = state.resolver.resolve_full_stream(artist, title).await {
-            return proxy_stream_with_meta(
-                &full_stream_url,
-                req,
-                "web-stream-opus",
-                "WebM Opus 160kbps",
-                Some(16),
-                Some(48000),
-                Some(160),
-                false,
-            ).await;
-        }
-    }
-
     // Fallback to Tidal stream if force_opus was set but web stream resolution was unavailable
-    if let Some(id) = &query.id {
-        let clean_id = id.trim_start_matches("tidal-");
-        if !clean_id.is_empty() && clean_id.chars().all(|c| c.is_ascii_digit()) {
-            if let Ok(tidal_stream) = state.tidal.resolve_stream_url(clean_id, None).await {
-                return proxy_stream_with_meta(
-                    &tidal_stream,
-                    req,
-                    "tidal-direct-hifi",
-                    "FLAC (Tidal Master)",
-                    Some(24),
-                    Some(96000),
-                    Some(2500),
-                    true,
-                ).await;
+    if force_opus {
+        if let Some(tidal_stream) =
+            resolve_tidal_for_request(&state, query.id.as_deref(), artist, title).await
+        {
+            let is_lossless = tidal_stream.format_label.to_uppercase().contains("FLAC");
+            let bitrate = if is_lossless {
+                if tidal_stream.bit_depth > 16 {
+                    Some(2500)
+                } else {
+                    Some(1411)
+                }
+            } else {
+                Some(320)
+            };
+            if let Ok(res) = try_proxy_stream_with_meta(
+                &tidal_stream.url,
+                is_head,
+                client_range.as_deref(),
+                "tidal-direct-hifi",
+                &tidal_stream.format_label,
+                Some(tidal_stream.bit_depth),
+                Some(tidal_stream.sample_rate),
+                bitrate,
+                is_lossless,
+            )
+            .await
+            {
+                return res;
             }
         }
     }
@@ -463,33 +574,41 @@ async fn handle_stream(
             // Only serve Apple Music 30s preview if explicitly requested via preview=true
             if is_apple_preview {
                 if query.preview == Some(true) {
-                    return proxy_stream_with_meta(
+                    if let Ok(res) = try_proxy_stream_with_meta(
                         direct_url,
-                        req,
+                        is_head,
+                        client_range.as_deref(),
                         "apple-music-preview",
                         "AAC 256kbps Preview",
                         Some(16),
                         Some(44100),
                         Some(256),
                         false,
-                    ).await;
+                    )
+                    .await
+                    {
+                        return res;
+                    }
                 } else {
                     tracing::warn!(
                         "Refusing to silently stream 30s preview clip for full-length request: '{} - {}'",
                         artist, title
                     );
                 }
-            } else {
-                return proxy_stream_with_meta(
-                    direct_url,
-                    req,
-                    "direct-url",
-                    "Direct Stream",
-                    Some(16),
-                    Some(44100),
-                    Some(320),
-                    false,
-                ).await;
+            } else if let Ok(res) = try_proxy_stream_with_meta(
+                direct_url,
+                is_head,
+                client_range.as_deref(),
+                "direct-url",
+                "Direct Stream",
+                Some(16),
+                Some(44100),
+                Some(320),
+                false,
+            )
+            .await
+            {
+                return res;
             }
         }
     }
@@ -504,16 +623,21 @@ async fn handle_stream(
         if let Some(meta) = state.metadata.resolve_apple_music(&search_term).await {
             if let Some(preview_url) = meta.preview_url {
                 tracing::info!("Explicit preview stream served for '{} - {}'", artist, title);
-                return proxy_stream_with_meta(
+                if let Ok(res) = try_proxy_stream_with_meta(
                     &preview_url,
-                    req,
+                    is_head,
+                    client_range.as_deref(),
                     "apple-music-preview",
                     "AAC 256kbps Preview",
                     Some(16),
                     Some(44100),
                     Some(256),
                     false,
-                ).await;
+                )
+                .await
+                {
+                    return res;
+                }
             }
         }
     }
@@ -527,6 +651,121 @@ async fn handle_stream(
     res
 }
 
+async fn persist_tidal_tokens_if_refreshed(state: &AppState) {
+    if let Some((new_access, new_refresh, new_country)) = state.tidal.take_dirty_tokens().await {
+        let mut cfg = state.config.write().await;
+        cfg.tidal_access_token = new_access;
+        if new_refresh.is_some() {
+            cfg.tidal_refresh_token = new_refresh;
+        }
+        cfg.tidal_country_code = Some(new_country);
+        let config_path = cfg.resolve_config_path();
+        if let Err(e) = cfg.save(&config_path) {
+            tracing::warn!(
+                "Failed persisting refreshed Tidal tokens to {:?}: {}",
+                config_path,
+                e
+            );
+        } else {
+            tracing::info!("Persisted refreshed Tidal OAuth tokens to {:?}", config_path);
+        }
+    }
+}
+
+async fn resolve_tidal_for_request(
+    state: &AppState,
+    query_id: Option<&str>,
+    artist: &str,
+    title: &str,
+) -> Option<crate::engines::tidal::TidalResolvedStream> {
+    if !state.tidal.has_user_token().await {
+        return None;
+    }
+
+    // 1. If a numeric Tidal track ID is provided, try resolving it directly first
+    if let Some(id) = query_id {
+        if !id.starts_with("itunes-") && !id.starts_with("apple-") {
+            let clean_id = id.trim_start_matches("tidal-").trim();
+            if !clean_id.is_empty() && clean_id.chars().all(|c| c.is_ascii_digit()) {
+                let res = state.tidal.resolve_stream_with_meta(clean_id, None).await;
+                persist_tidal_tokens_if_refreshed(state).await;
+                if let Ok(resolved) = res {
+                    return Some(resolved);
+                }
+            }
+        }
+    }
+
+    // 2. If ID is missing/non-numeric (or was a non-Tidal catalog ID), search Tidal catalog by artist + title
+    if title.is_empty() {
+        return None;
+    }
+
+    let clean_title = crate::engines::soulseek::clean_query_title(title);
+    let primary_artist = crate::engines::stream_resolver::extract_primary_artist(artist);
+    let norm_primary = crate::engines::stream_resolver::normalize_match_text(&primary_artist);
+
+    let mut search_queries = Vec::new();
+    let full_q = format!("{} {}", artist, title).trim().to_string();
+    if !full_q.is_empty() {
+        search_queries.push(full_q);
+    }
+    let clean_q = format!("{} {}", primary_artist, clean_title).trim().to_string();
+    if !clean_q.is_empty() && !search_queries.iter().any(|q| q == &clean_q) {
+        search_queries.push(clean_q);
+    }
+
+    for q in &search_queries {
+        let Ok(tracks) = state.tidal.search_tracks(q).await else {
+            continue;
+        };
+
+        let mut best: Option<(i32, String)> = None;
+        for t in &tracks {
+            if t.id.is_empty() || t.id == "0" {
+                continue;
+            }
+            let Some(mut score) = crate::engines::stream_resolver::score_track_title_match(
+                title,
+                &clean_title,
+                &t.title,
+            ) else {
+                continue;
+            };
+            if !norm_primary.is_empty() {
+                if !crate::engines::stream_resolver::artist_matches_primary(&norm_primary, &t.artist)
+                {
+                    continue;
+                }
+                if crate::engines::stream_resolver::normalize_match_text(&t.artist) == norm_primary
+                {
+                    score += 20;
+                }
+            }
+            if t.audio_quality.to_uppercase().contains("LOSSLESS") {
+                score += 15;
+            }
+            if best
+                .as_ref()
+                .map(|(best_score, _)| score > *best_score)
+                .unwrap_or(true)
+            {
+                best = Some((score, t.id.clone()));
+            }
+        }
+
+        if let Some((_, matched_id)) = best {
+            let res = state.tidal.resolve_stream_with_meta(&matched_id, None).await;
+            persist_tidal_tokens_if_refreshed(state).await;
+            if let Ok(resolved) = res {
+                return Some(resolved);
+            }
+        }
+    }
+
+    None
+}
+
 pub async fn proxy_stream(target_url: &str, req: axum::extract::Request) -> Response {
     proxy_stream_with_meta(
         target_url,
@@ -537,7 +776,8 @@ pub async fn proxy_stream(target_url: &str, req: axum::extract::Request) -> Resp
         None,
         None,
         false,
-    ).await
+    )
+    .await
 }
 
 pub async fn proxy_stream_with_meta(
@@ -550,17 +790,53 @@ pub async fn proxy_stream_with_meta(
     bitrate: Option<u32>,
     is_lossless: bool,
 ) -> Response {
+    let is_head = req.method() == axum::http::Method::HEAD;
+    let client_range = req
+        .headers()
+        .get(axum::http::header::RANGE)
+        .and_then(|r| r.to_str().ok())
+        .map(|s| s.to_string());
+
+    match try_proxy_stream_with_meta(
+        target_url,
+        is_head,
+        client_range.as_deref(),
+        source,
+        format,
+        bit_depth,
+        sample_rate,
+        bitrate,
+        is_lossless,
+    )
+    .await
+    {
+        Ok(res) => res,
+        Err(status) => (status, "Upstream stream unavailable").into_response(),
+    }
+}
+
+async fn try_proxy_stream_with_meta(
+    target_url: &str,
+    is_head: bool,
+    client_range: Option<&str>,
+    source: &str,
+    format: &str,
+    bit_depth: Option<u8>,
+    sample_rate: Option<u32>,
+    bitrate: Option<u32>,
+    is_lossless: bool,
+) -> Result<Response, StatusCode> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0")
         .build()
         .unwrap_or_default();
     let mut req_builder = client.get(target_url);
 
-    // Forward client Range header for byte-seeking
-    if let Some(range) = req.headers().get(axum::http::header::RANGE) {
-        if let Ok(range_str) = range.to_str() {
-            req_builder = req_builder.header(reqwest::header::RANGE, range_str);
-        }
+    // For HEAD probes, request only byte 0 so we never open a full-file upstream download
+    if is_head {
+        req_builder = req_builder.header(reqwest::header::RANGE, client_range.unwrap_or("bytes=0-0"));
+    } else if let Some(range_str) = client_range {
+        req_builder = req_builder.header(reqwest::header::RANGE, range_str);
     }
 
     match req_builder.send().await {
@@ -568,13 +844,23 @@ pub async fn proxy_stream_with_meta(
             let upstream_status = upstream_res.status();
             if !upstream_status.is_success() && upstream_status != reqwest::StatusCode::PARTIAL_CONTENT {
                 tracing::warn!("Stream proxy upstream error {}: {}", upstream_status, target_url);
-                return (upstream_status, "Upstream stream unavailable").into_response();
+                let code = StatusCode::from_u16(upstream_status.as_u16())
+                    .unwrap_or(StatusCode::BAD_GATEWAY);
+                return Err(code);
             }
 
-            let status = if upstream_status == reqwest::StatusCode::PARTIAL_CONTENT {
+            let status = if is_head && client_range.is_none() {
+                StatusCode::OK
+            } else if upstream_status == reqwest::StatusCode::PARTIAL_CONTENT {
                 StatusCode::PARTIAL_CONTENT
             } else {
                 StatusCode::OK
+            };
+
+            let stream_name = if is_lossless {
+                format!("Tidal Stream ({})", format)
+            } else {
+                format!("Online Stream ({})", format)
             };
 
             let mut builder = Response::builder()
@@ -587,7 +873,7 @@ pub async fn proxy_stream_with_meta(
                 .header("x-audio-source", source)
                 .header("x-audio-format", format)
                 .header("x-audio-is-lossless", if is_lossless { "true" } else { "false" })
-                .header("x-audio-file-name", if is_lossless { "Tidal Master Stream" } else { "Online Web Stream (Opus 160k)" });
+                .header("x-audio-file-name", stream_name);
 
             if let Some(bd) = bit_depth {
                 builder = builder.header("x-audio-bit-depth", bd.to_string());
@@ -599,16 +885,76 @@ pub async fn proxy_stream_with_meta(
                 builder = builder.header("x-audio-bitrate", br.to_string());
             }
 
+            let fallback_mime = if is_lossless || format.to_ascii_uppercase().contains("FLAC") {
+                "audio/flac"
+            } else if format.to_ascii_uppercase().contains("AAC")
+                || format.to_ascii_uppercase().contains("MP4")
+            {
+                "audio/mp4"
+            } else {
+                "audio/webm"
+            };
+
             if let Some(content_type) = upstream_res.headers().get(reqwest::header::CONTENT_TYPE) {
                 if let Ok(ct) = content_type.to_str() {
-                    if ct.starts_with("text/") || ct.contains("html") {
-                        builder = builder.header(axum::http::header::CONTENT_TYPE, "audio/webm");
+                    let ct_lower = ct.trim().to_ascii_lowercase();
+                    if ct_lower.starts_with("text/")
+                        || ct_lower.contains("html")
+                        || ct_lower == "application/octet-stream"
+                        || ct_lower == "binary/octet-stream"
+                    {
+                        builder = builder.header(axum::http::header::CONTENT_TYPE, fallback_mime);
                     } else {
                         builder = builder.header(axum::http::header::CONTENT_TYPE, ct);
                     }
                 }
             } else {
-                builder = builder.header(axum::http::header::CONTENT_TYPE, "audio/mpeg");
+                builder = builder.header(axum::http::header::CONTENT_TYPE, fallback_mime);
+            }
+
+            if is_head {
+                if client_range.is_none() {
+                    // Extract full file byte length from "bytes 0-0/<total>" if provided
+                    let total_len = upstream_res
+                        .headers()
+                        .get(reqwest::header::CONTENT_RANGE)
+                        .and_then(|cr| cr.to_str().ok())
+                        .and_then(|cr| cr.rsplit_once('/'))
+                        .map(|(_, tot)| tot.trim())
+                        .filter(|tot| !tot.is_empty() && *tot != "*" && tot.chars().all(|c| c.is_ascii_digit()));
+
+                    if let Some(tot) = total_len {
+                        builder = builder.header(axum::http::header::CONTENT_LENGTH, tot);
+                    } else if upstream_status == reqwest::StatusCode::OK {
+                        if let Some(cl) = upstream_res
+                            .headers()
+                            .get(reqwest::header::CONTENT_LENGTH)
+                            .and_then(|v| v.to_str().ok())
+                        {
+                            builder = builder.header(axum::http::header::CONTENT_LENGTH, cl);
+                        }
+                    }
+                } else {
+                    if let Some(cl) = upstream_res
+                        .headers()
+                        .get(reqwest::header::CONTENT_LENGTH)
+                        .and_then(|v| v.to_str().ok())
+                    {
+                        builder = builder.header(axum::http::header::CONTENT_LENGTH, cl);
+                    }
+                    if let Some(cr) = upstream_res
+                        .headers()
+                        .get(reqwest::header::CONTENT_RANGE)
+                        .and_then(|v| v.to_str().ok())
+                    {
+                        builder = builder.header(axum::http::header::CONTENT_RANGE, cr);
+                    }
+                }
+
+                drop(upstream_res);
+                return builder
+                    .body(axum::body::Body::empty())
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
             }
 
             if let Some(content_length) = upstream_res.headers().get(reqwest::header::CONTENT_LENGTH) {
@@ -625,11 +971,15 @@ pub async fn proxy_stream_with_meta(
 
             let stream = upstream_res.bytes_stream();
             let body = axum::body::Body::from_stream(stream);
-            builder.body(body).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+            builder.body(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
         }
         Err(e) => {
-            tracing::warn!("Stream proxy failed for {}: {}, falling back to 307 redirect", target_url, e);
-            Redirect::temporary(target_url).into_response()
+            tracing::warn!(
+                "Stream proxy connection failed for {}: {}",
+                target_url,
+                e
+            );
+            Err(StatusCode::BAD_GATEWAY)
         }
     }
 }

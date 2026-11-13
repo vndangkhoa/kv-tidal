@@ -99,10 +99,10 @@ else
   if [ -n "$PORT" ]; then
     sed -i -E "s/\"port\":[[:space:]]*[0-9]+/\"port\": ${PORT}/" "$CONFIG_FILE"
   fi
-  if [ -n "$WIZARD_SUB_USER" ]; then
+  if [ -n "$WIZARD_SUB_USER" ] && [ "$WIZARD_SUB_USER" != "admin" ]; then
     sed -i -E "s/\"subsonic_user\":[[:space:]]*\"[^\"]*\"/\"subsonic_user\": \"${WIZARD_SUB_USER}\"/" "$CONFIG_FILE"
   fi
-  if [ -n "$WIZARD_SUB_PASS" ]; then
+  if [ -n "$WIZARD_SUB_PASS" ] && [ "$WIZARD_SUB_PASS" != "admin" ]; then
     sed -i -E "s/\"subsonic_password\":[[:space:]]*\"[^\"]*\"/\"subsonic_password\": \"${WIZARD_SUB_PASS}\"/" "$CONFIG_FILE"
   fi
   if [ -n "$MUSIC_DIR" ]; then

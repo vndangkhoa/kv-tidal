@@ -44,6 +44,11 @@ export function QueueDrawer() {
     isQueueOpen,
     setIsQueueOpen,
     fetchSuggestions,
+    gaplessEnabled,
+    setGaplessEnabled,
+    crossfadeSeconds,
+    setCrossfadeSeconds,
+    isNextTrackPrebuffered,
   } = usePlayer();
 
   const [activeTab, setActiveTab] = useState<QueueTab>("queue");
@@ -240,36 +245,90 @@ export function QueueDrawer() {
           )}
         </div>
 
-        {/* Autoplay Bar (Subtle & Compact) */}
-        <div className="px-5 py-2.5 border-b border-border/60 bg-[#121212]/40 flex items-center justify-between text-xs">
-          <div className="flex items-center space-x-2.5">
-            <button
-              onClick={() => setAutoplay(!autoplay)}
-              aria-label="Toggle Autoplay"
-              className={`relative inline-flex h-4 w-8 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                autoplay ? "bg-primary" : "bg-neutral-700"
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-black shadow transition duration-200 ease-in-out ${
-                  autoplay ? "translate-x-4" : "translate-x-0"
+        {/* Autoplay & Gapless Transition Bar (Subtle & Compact) */}
+        <div className="px-5 py-2.5 border-b border-border/60 bg-[#121212]/40 space-y-2 text-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <button
+                onClick={() => setAutoplay(!autoplay)}
+                aria-label="Toggle Autoplay"
+                className={`relative inline-flex h-4 w-8 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  autoplay ? "bg-primary" : "bg-neutral-700"
                 }`}
-              />
-            </button>
-            <div>
-              <span className="font-semibold text-textPrimary">Autoplay</span>
-              <span className="text-[10px] text-textSecondary ml-1.5 hidden sm:inline">
-                {autoplay ? "Similar songs play automatically" : "Playback stops at queue end"}
-              </span>
+              >
+                <span
+                  className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-black shadow transition duration-200 ease-in-out ${
+                    autoplay ? "translate-x-4" : "translate-x-0"
+                  }`}
+                />
+              </button>
+              <div>
+                <span className="font-semibold text-textPrimary">Autoplay</span>
+                <span className="text-[10px] text-textSecondary ml-1.5 hidden sm:inline">
+                  {autoplay ? "Similar songs play automatically" : "Playback stops at queue end"}
+                </span>
+              </div>
             </div>
+
+            {currentTrack && (
+              <span className="text-[10px] text-textSecondary font-mono uppercase tracking-wider flex items-center space-x-1">
+                <Radio className="w-3 h-3 text-primary animate-pulse" />
+                <span>Radio Active</span>
+              </span>
+            )}
           </div>
 
-          {currentTrack && (
-            <span className="text-[10px] text-textSecondary font-mono uppercase tracking-wider flex items-center space-x-1">
-              <Radio className="w-3 h-3 text-primary animate-pulse" />
-              <span>Radio Active</span>
-            </span>
-          )}
+          {/* Dual-Deck Gapless & Crossfade Quick Bar */}
+          <div className="flex items-center justify-between pt-1.5 border-t border-white/5">
+            <div className="flex items-center space-x-2.5">
+              <button
+                onClick={() => setGaplessEnabled(!gaplessEnabled)}
+                aria-label="Toggle Gapless Playback"
+                className={`relative inline-flex h-4 w-8 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  gaplessEnabled ? "bg-emerald-400" : "bg-neutral-700"
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-black shadow transition duration-200 ease-in-out ${
+                    gaplessEnabled ? "translate-x-4" : "translate-x-0"
+                  }`}
+                />
+              </button>
+              <div className="flex items-center space-x-1.5">
+                <span className="font-semibold text-textPrimary">Gapless</span>
+                {gaplessEnabled && isNextTrackPrebuffered && (
+                  <span
+                    className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                    title="Next track is decoded and buffered in Standby Deck"
+                  >
+                    PRE-BUFFERED
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {gaplessEnabled ? (
+              <div className="flex items-center space-x-1">
+                {[0, 2, 4, 6, 8, 12].map((sec) => (
+                  <button
+                    key={sec}
+                    type="button"
+                    onClick={() => setCrossfadeSeconds(sec)}
+                    title={sec === 0 ? "0ms pure gapless transition" : `${sec}-second smooth crossfade`}
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold transition-all cursor-pointer border ${
+                      crossfadeSeconds === sec
+                        ? "bg-emerald-500/25 text-emerald-300 border-emerald-500/50"
+                        : "bg-surface/80 text-textSecondary border-border/60 hover:text-white"
+                    }`}
+                  >
+                    {sec === 0 ? "0ms" : `${sec}s`}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className="text-[10px] font-mono text-textSecondary">Disabled</span>
+            )}
+          </div>
         </div>
 
         {/* Scrollable Content */}
