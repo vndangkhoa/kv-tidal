@@ -29,10 +29,14 @@ import com.kvtidal.app.data.repository.MusicRepository
 import com.kvtidal.app.data.update.AppUpdateInfo
 import com.kvtidal.app.data.update.UpdateChecker
 import com.kvtidal.app.player.AudioCacheManager
+import com.kvtidal.app.player.AudioOutputManager
+import com.kvtidal.app.player.GainStage
+import com.kvtidal.app.player.OutputTerminal
 import com.kvtidal.app.player.PlayerManager
 import com.kvtidal.app.ui.adaptive.LocalWindowState
 import com.kvtidal.app.ui.adaptive.MaxContentWidthDp
 import com.kvtidal.app.ui.components.KvTidalBrandMark
+import com.kvtidal.app.ui.components.OutputDeviceSheet
 import com.kvtidal.app.ui.components.QualityBadgePill
 import com.kvtidal.app.ui.components.YtmIcons
 import com.kvtidal.app.ui.theme.*
@@ -82,12 +86,17 @@ fun SettingsScreen(
     val latencyMs by authRepo.serverLatencyMs.collectAsState()
     val librarySummary by authRepo.librarySummary.collectAsState()
     val totalDownloadBytes by PlayerManager.totalDownloadBytes.collectAsState()
+    val selectedTerminal by AudioOutputManager.selectedTerminal.collectAsState()
+    val bitPerfectEnabled by AudioOutputManager.bitPerfectEnabled.collectAsState()
+    val selectedGain by AudioOutputManager.selectedGain.collectAsState()
+    val activeHardwareSummary by AudioOutputManager.activeHardwareSummary.collectAsState()
 
     var serverUrlInput by remember { mutableStateOf(RetrofitClient.getBaseUrl()) }
     var isTestingHost by remember { mutableStateOf(false) }
 
     var selectedQuality by remember { mutableStateOf(RetrofitClient.getStreamQualityMode()) }
     var audioCacheBytes by remember { mutableLongStateOf(AudioCacheManager.getCacheSizeBytes(context)) }
+    var showOutputSheet by remember { mutableStateOf(false) }
 
     var serverSettings by remember { mutableStateOf<TidalSettingsResponse?>(null) }
     var tidalTokenInput by remember { mutableStateOf("") }
@@ -98,6 +107,12 @@ fun SettingsScreen(
     var updateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var updateStatusText by remember { mutableStateOf<String?>(null) }
     var showClearDataDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedQuality, bitPerfectEnabled) {
+        if (bitPerfectEnabled && selectedQuality != "HI_RES_LOSSLESS") {
+            selectedQuality = "HI_RES_LOSSLESS"
+        }
+    }
 
     val currentVersionName = remember(context) {
         runCatching {
@@ -558,6 +573,107 @@ fun SettingsScreen(
             }
         }
 
+        val outputCard: @Composable () -> Unit = {
+            SettingsCardContainer(
+                title = "Output Stage (DAC / LO / 3mm / 4mm)",
+                badgeText = if (bitPerfectEnabled) "${selectedTerminal.shortBadge} • BIT-PERFECT" else selectedTerminal.shortBadge,
+                badgeAccent = if (bitPerfectEnabled) TidalEmerald else TidalCyan
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Bit-Perfect Direct PCM (32-bit Float)",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TidalPureWhite
+                        )
+                        Text(
+                            text = activeHardwareSummary,
+                            fontSize = 11.sp,
+                            color = TidalCyanAccent,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Switch(
+                        checked = bitPerfectEnabled,
+                        onCheckedChange = { enabled ->
+                            AudioOutputManager.setBitPerfectEnabled(enabled)
+                            if (enabled) selectedQuality = "HI_RES_LOSSLESS"
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = TidalPureBlack,
+                            checkedTrackColor = TidalEmerald
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                val terminalRows = OutputTerminal.entries.chunked(2)
+                terminalRows.forEach { pair ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        pair.forEach { terminal ->
+                            val active = selectedTerminal == terminal
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (active) TidalCyanDim else TidalSurface,
+                                border = BorderStroke(
+                                    0.8.dp,
+                                    if (active) TidalCyanAccent else TidalWhite10
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        AudioOutputManager.selectTerminal(terminal)
+                                        Toast.makeText(
+                                            context,
+                                            "Output stage: ${terminal.title}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                            ) {
+                                Text(
+                                    text = terminal.shortBadge,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (active) TidalCyan else TidalGrey02,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+                        if (pair.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(
+                    onClick = { showOutputSheet = true },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TidalCyan,
+                        contentColor = TidalPureBlack
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Open Hardware DAC & Gain Inspector", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+            }
+        }
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -576,7 +692,7 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Box(modifier = Modifier.weight(1f)) { serverCard() }
+                        Box(modifier = Modifier.weight(1f)) { outputCard() }
                         Box(modifier = Modifier.weight(1f)) { audioCard() }
                     }
                 }
@@ -585,17 +701,26 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
+                        Box(modifier = Modifier.weight(1f)) { serverCard() }
                         Box(modifier = Modifier.weight(1f)) { engineCard() }
-                        Box(modifier = Modifier.weight(1f)) { updatesCard() }
                     }
                 }
+                item { updatesCard() }
             } else {
-                item { serverCard() }
+                item { outputCard() }
                 item { audioCard() }
+                item { serverCard() }
                 item { engineCard() }
                 item { updatesCard() }
             }
         }
+    }
+
+    if (showOutputSheet) {
+        OutputDeviceSheet(
+            musicRepo = musicRepo,
+            onDismiss = { showOutputSheet = false }
+        )
     }
 
     if (showClearDataDialog) {

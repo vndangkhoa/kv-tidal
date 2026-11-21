@@ -114,10 +114,10 @@ fun LibraryScreen(
     val nasAlbums = remember(librarySummary) {
         librarySummary?.albums.orEmpty().map { alb ->
             AlbumHit(
-                id = alb.id,
+                id = "local-album-${alb.id}",
                 title = alb.name,
                 artist = alb.artist,
-                coverUrl = RetrofitClient.resolveCoverUrl("/rest/getCoverArt.view?id=${alb.id}"),
+                coverUrl = RetrofitClient.resolveCoverUrl("/rest/getCoverArt.view?id=album-${alb.id}"),
                 year = alb.year?.toString().orEmpty(),
                 trackCount = alb.trackCount,
                 isLocalLibrary = true
@@ -130,7 +130,7 @@ fun LibraryScreen(
             ArtistHit(
                 id = art.id,
                 name = art.name,
-                coverUrl = "",
+                coverUrl = RetrofitClient.resolveCoverUrl("/rest/getCoverArt.view?id=artist-${art.id}"),
                 subscribers = "${art.albumCount} albums • ${art.trackCount} tracks",
                 category = "nas_vault"
             )

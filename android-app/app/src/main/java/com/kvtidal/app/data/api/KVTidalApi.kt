@@ -83,4 +83,12 @@ interface KVTidalApi {
 
     @POST("/api/settings/test-soulseek")
     suspend fun testSoulseek(): Response<TidalTestResponse>
+
+    @GET("/api/devices")
+    suspend fun getAudioDevices(): Response<TidalServerDevicesResponse>
+
+    @POST("/api/devices/select")
+    suspend fun selectAudioDevice(
+        @Body payload: Map<String, String>
+    ): Response<Map<String, Any>>
 }

@@ -16,10 +16,14 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import coil.imageLoader
 import coil.request.ImageRequest
@@ -61,6 +65,9 @@ object PlayerManager {
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying
+
+    private val _isBuffering = MutableStateFlow(false)
+    val isBuffering: StateFlow<Boolean> = _isBuffering
 
     private val _currentCoverBitmap = MutableStateFlow<Bitmap?>(null)
     val currentCoverBitmap: StateFlow<Bitmap?> = _currentCoverBitmap
@@ -194,12 +201,26 @@ object PlayerManager {
         if (exoPlayer == null) {
             val appCtx = context.applicationContext
             OfflineDownloadManager.init(appCtx)
+            AudioOutputManager.init(appCtx)
             loadPersistedState(appCtx)
 
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build()
+
+            val renderersFactory = object : DefaultRenderersFactory(appCtx) {
+                override fun buildAudioSink(
+                    ctx: Context,
+                    enableFloatOutput: Boolean,
+                    enableAudioTrackPlaybackParams: Boolean
+                ): AudioSink {
+                    return DefaultAudioSink.Builder(ctx)
+                        .setEnableFloatOutput(true)
+                        .setEnableAudioTrackPlaybackParams(false)
+                        .build()
+                }
+            }
 
             val dataSourceFactory = AudioCacheManager.buildPlaybackDataSourceFactory(appCtx)
             val mediaSourceFactory = DefaultMediaSourceFactory(appCtx)
@@ -209,7 +230,7 @@ object PlayerManager {
                 .setBufferDurationsMs(15_000, 60_000, 250, 750)
                 .build()
 
-            exoPlayer = ExoPlayer.Builder(appCtx)
+            exoPlayer = ExoPlayer.Builder(appCtx, renderersFactory)
                 .setLoadControl(loadControl)
                 .setMediaSourceFactory(mediaSourceFactory)
                 .setAudioAttributes(audioAttributes, true)
@@ -222,6 +243,7 @@ object PlayerManager {
                         }
 
                         override fun onPlaybackStateChanged(state: Int) {
+                            _isBuffering.value = (state == Player.STATE_BUFFERING)
                             if (state == Player.STATE_READY) {
                                 _duration.value = duration.coerceAtLeast(0L)
                                 if (benchTapElapsedMs > 0L) {
@@ -235,14 +257,33 @@ object PlayerManager {
                         }
 
                         override fun onPlayerError(error: PlaybackException) {
+                            _isBuffering.value = false
                             val track = _currentTrack.value ?: return
                             Log.w(TAG, "Playback error on ${track.id}: ${error.message}")
                             AudioCacheManager.evictTrack(appCtx, track.id)
+                            val fallbackUrl = track.previewUrl?.takeIf { it.isNotBlank() }
+                            if (fallbackUrl != null && currentStreamUrl != fallbackUrl) {
+                                Log.i(TAG, "Falling back to preview stream for ${track.title}")
+                                currentStreamUrl = fallbackUrl
+                                startMediaItem(track, fallbackUrl, cacheKey = null)
+                            }
                         }
                     })
                 }
+            applyAudioOutputRouting()
         }
         return exoPlayer!!
+    }
+
+    fun applyAudioOutputRouting() {
+        val player = exoPlayer ?: return
+        runCatching {
+            player.setPreferredAudioDevice(AudioOutputManager.resolvePreferredAudioDevice())
+        }
+        runCatching {
+            player.volume = AudioOutputManager.effectiveVolume().coerceIn(0.05f, 1.0f)
+            player.playbackParameters = PlaybackParameters.DEFAULT
+        }
     }
 
     private fun refreshCapturedSignalPath() {
@@ -433,6 +474,27 @@ object PlayerManager {
         if (q.isEmpty()) return
         val prevIdx = (_queueIndex.value - 1).coerceAtLeast(0)
         playTrack(q[prevIdx], q)
+    }
+
+    fun enqueueNext(context: Context, track: Track) {
+        val q = _queue.value.toMutableList()
+        if (_currentTrack.value == null || q.isEmpty()) {
+            playTrack(track, listOf(track))
+            return
+        }
+        val currentIdx = _queueIndex.value.coerceIn(0, q.lastIndex)
+        val currentId = q[currentIdx].id
+        if (track.id == currentId) {
+            Toast.makeText(context, "'${track.title}' is already playing", Toast.LENGTH_SHORT).show()
+            return
+        }
+        q.removeAll { it.id == track.id }
+        val newCurrentIdx = q.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
+        val insertIdx = (newCurrentIdx + 1).coerceAtMost(q.size)
+        q.add(insertIdx, track)
+        _queue.value = q
+        _queueIndex.value = newCurrentIdx
+        Toast.makeText(context, "Queued '${track.title}' to play next", Toast.LENGTH_SHORT).show()
     }
 
     fun toggleDownload(context: Context, track: Track) {

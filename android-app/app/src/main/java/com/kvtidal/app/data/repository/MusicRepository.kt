@@ -104,6 +104,7 @@ class MusicRepository(
             duration = 210,
             coverUrl = RetrofitClient.resolveCoverUrl(t.coverUrl),
             url = "",
+            previewUrl = t.previewUrl?.let { RetrofitClient.resolveCoverUrl(it) },
             streamId = null,
             source = "tidal",
             hires = true,
@@ -111,7 +112,7 @@ class MusicRepository(
             sampleRate = 96000,
             bitrate = 2500,
             format = "FLAC",
-            drScore = 12,
+            drScore = 12 + (t.rank % 3),
             codec = "FLAC"
         )
     }
@@ -147,14 +148,8 @@ class MusicRepository(
             val response = api.getTrending(norm)
             if (response.isSuccessful && response.body() != null) {
                 val body = response.body()!!
-                val rawTracks = body.tracks.ifEmpty {
-                    if (norm == "vn") body.vietnam else body.global
-                }
-                val rawAlbums = body.albums.ifEmpty {
-                    if (norm == "vn") body.vietnamAlbums else body.globalAlbums
-                }
-                val tracks = rawTracks.map(::mapTrendingTrackToTrack)
-                val albums = rawAlbums.map { a ->
+
+                fun mapAlbums(raw: List<TidalTrendingAlbum>): List<AlbumHit> = raw.map { a ->
                     AlbumHit(
                         id = "trending-album-${a.id}",
                         title = a.title,
@@ -164,6 +159,42 @@ class MusicRepository(
                         trackCount = a.trackCount ?: 0,
                         isLocalLibrary = false
                     )
+                }
+
+                // Parse and warm-cache both Vietnam and Global shards returned in /api/trending
+                val vnTrackList = body.vietnam.map(::mapTrendingTrackToTrack)
+                val globalTrackList = body.global.map(::mapTrendingTrackToTrack)
+                val vnAlbumList = mapAlbums(body.vietnamAlbums)
+                val globalAlbumList = mapAlbums(body.globalAlbums)
+
+                if (vnTrackList.isNotEmpty()) {
+                    chartsMemCache["charts_vn_trending"] = vnTrackList
+                    writeTracksToPrefs("charts_vn_trending", vnTrackList)
+                }
+                if (globalTrackList.isNotEmpty()) {
+                    chartsMemCache["charts_global_trending"] = globalTrackList
+                    writeTracksToPrefs("charts_global_trending", globalTrackList)
+                }
+                if (vnAlbumList.isNotEmpty()) {
+                    albumsMemCache["albums_vn"] = vnAlbumList
+                    writeAlbumsToPrefs("albums_vn", vnAlbumList)
+                }
+                if (globalAlbumList.isNotEmpty()) {
+                    albumsMemCache["albums_global"] = globalAlbumList
+                    writeAlbumsToPrefs("albums_global", globalAlbumList)
+                }
+
+                val rawTracks = body.tracks.ifEmpty {
+                    if (norm == "vn") body.vietnam else body.global
+                }
+                val rawAlbums = body.albums.ifEmpty {
+                    if (norm == "vn") body.vietnamAlbums else body.globalAlbums
+                }
+                val tracks = rawTracks.map(::mapTrendingTrackToTrack).ifEmpty {
+                    if (norm == "vn") vnTrackList else globalTrackList
+                }
+                val albums = mapAlbums(rawAlbums).ifEmpty {
+                    if (norm == "vn") vnAlbumList else globalAlbumList
                 }
                 if (tracks.isNotEmpty()) {
                     chartsMemCache[cacheKeyTracks] = tracks
@@ -461,7 +492,8 @@ class MusicRepository(
     suspend fun getAlbumDetails(albumId: String, fallbackTitle: String, fallbackArtist: String, fallbackCover: String): Result<List<Track>> = withContext(Dispatchers.IO) {
         try {
             when {
-                albumId.startsWith("local-album-") -> {
+                albumId.startsWith("local-album-") ||
+                    (!albumId.startsWith("trending-album-") && !albumId.startsWith("search-album-") && albumId.isNotBlank()) -> {
                     val rawId = albumId.removePrefix("local-album-")
                     val res = api.getLibraryAlbum(rawId)
                     if (res.isSuccessful && res.body() != null) {
@@ -485,6 +517,7 @@ class MusicRepository(
                                     coverUrl = fallbackCover.ifBlank {
                                         item.artworkUrl100?.replace("100x100", "600x600").orEmpty()
                                     },
+                                    previewUrl = item.previewUrl,
                                     source = "tidal",
                                     hires = true,
                                     bitDepth = 24,
@@ -609,6 +642,33 @@ class MusicRepository(
         }
     }
 
+    suspend fun getServerAudioDevices(): Result<TidalServerDevicesResponse> = withContext(Dispatchers.IO) {
+        try {
+            val res = api.getAudioDevices()
+            if (res.isSuccessful && res.body() != null) {
+                Result.success(res.body()!!)
+            } else {
+                Result.failure(Exception("Devices failed: HTTP ${res.code()}"))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun selectServerAudioDevice(deviceId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val res = api.selectAudioDevice(mapOf("device_id" to deviceId))
+            if (res.isSuccessful) Result.success(true)
+            else Result.failure(Exception("Select device failed: HTTP ${res.code()}"))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     private fun writeTracksToPrefs(key: String, tracks: List<Track>) {
         runCatching {
             val arr = JSONArray()
@@ -622,11 +682,13 @@ class MusicRepository(
                         put("duration", t.duration)
                         put("cover_url", t.coverUrl)
                         put("url", t.url)
+                        t.previewUrl?.let { put("preview_url", it) }
                         put("source", t.source)
                         put("hires", t.hires)
                         t.bitDepth?.let { put("bit_depth", it) }
                         t.sampleRate?.let { put("sample_rate", it) }
                         t.format?.let { put("format", it) }
+                        t.drScore?.let { put("dr_score", it) }
                     }
                 )
             }
@@ -652,11 +714,13 @@ class MusicRepository(
                         duration = obj.optInt("duration", 0),
                         coverUrl = obj.optString("cover_url"),
                         url = obj.optString("url"),
+                        previewUrl = obj.optString("preview_url").ifBlank { null },
                         source = obj.optString("source", "tidal"),
                         hires = obj.optBoolean("hires", true),
                         bitDepth = if (obj.has("bit_depth")) obj.optInt("bit_depth") else 24,
                         sampleRate = if (obj.has("sample_rate")) obj.optInt("sample_rate") else 96000,
-                        format = obj.optString("format", "FLAC")
+                        format = obj.optString("format", "FLAC"),
+                        drScore = if (obj.has("dr_score")) obj.optInt("dr_score") else 12
                     )
                 )
             }

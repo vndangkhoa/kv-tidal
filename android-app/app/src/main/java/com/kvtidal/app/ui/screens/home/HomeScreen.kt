@@ -37,10 +37,12 @@ import com.kvtidal.app.data.model.Track
 import com.kvtidal.app.data.model.User
 import com.kvtidal.app.data.repository.AuthRepository
 import com.kvtidal.app.data.repository.MusicRepository
+import com.kvtidal.app.player.AudioOutputManager
 import com.kvtidal.app.player.PlayerManager
 import com.kvtidal.app.ui.adaptive.LocalWindowState
 import com.kvtidal.app.ui.adaptive.MaxContentWidthDp
 import com.kvtidal.app.ui.components.KvTidalBrandMark
+import com.kvtidal.app.ui.components.OutputDeviceSheet
 import com.kvtidal.app.ui.components.QualityBadgePill
 import com.kvtidal.app.ui.components.TrackCardSquare
 import com.kvtidal.app.ui.components.TrackListItem
@@ -57,8 +59,12 @@ private data class HomeFilterChip(
 
 private val HOME_FILTER_CHIPS = listOf(
     HomeFilterChip("all", "All"),
-    HomeFilterChip("hires", "Hi-Res MAX", "24bit flac master"),
+    HomeFilterChip("top_charts", "Top Charts"),
     HomeFilterChip("vpop", "V-Pop"),
+    HomeFilterChip("global", "Global Top"),
+    HomeFilterChip("hires", "Hi-Res MAX", "24bit flac master"),
+    HomeFilterChip("dsd", "DSD Vault", "DSD audiophile master"),
+    HomeFilterChip("dr12", "DR12+ Master", "audiophile acoustic master"),
     HomeFilterChip("nas", "NAS Vault"),
     HomeFilterChip("audiophile", "Audiophile", "audiophile vocal lossless"),
     HomeFilterChip("jazz", "Jazz & Acoustic", "jazz acoustic audiophile"),
@@ -90,73 +96,98 @@ fun HomeScreen(
     val librarySummary by authRepo.librarySummary.collectAsState()
     val recentlyPlayed by PlayerManager.recentlyPlayedHistory.collectAsState()
     val likedIds by PlayerManager.likedTrackIds.collectAsState()
+    val selectedTerminal by AudioOutputManager.selectedTerminal.collectAsState()
+    val bitPerfectEnabled by AudioOutputManager.bitPerfectEnabled.collectAsState()
 
     var selectedChip by remember { mutableStateOf("all") }
     var chartCountry by remember { mutableStateOf("VN") }
     var artistFilter by remember { mutableStateOf("all") }
 
-    var quickPicks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var vnCharts by remember { mutableStateOf(musicRepo.getCachedCharts("VN")) }
     var globalCharts by remember { mutableStateOf(musicRepo.getCachedCharts("GLOBAL")) }
-    var trendingAlbums by remember { mutableStateOf(musicRepo.getCachedTrendingAlbums("VN")) }
-    var allArtists by remember { mutableStateOf(musicRepo.getCachedArtists("vn")) }
+    var vnAlbums by remember { mutableStateOf(musicRepo.getCachedTrendingAlbums("VN")) }
+    var globalAlbums by remember { mutableStateOf(musicRepo.getCachedTrendingAlbums("GLOBAL")) }
+    var allArtists by remember {
+        mutableStateOf(
+            musicRepo.getCachedArtists("all").ifEmpty { musicRepo.getCachedArtists("vn") }
+        )
+    }
     var nasTracks by remember { mutableStateOf(musicRepo.getCachedLibraryTrackList()) }
 
-    var isLoading by remember { mutableStateOf(vnCharts.isEmpty()) }
-    var showCastDialog by remember { mutableStateOf(false) }
+    val chipTrackCache = remember { mutableStateMapOf<String, List<Track>>() }
+    var isLoading by remember { mutableStateOf(vnCharts.isEmpty() && globalCharts.isEmpty()) }
+    var isCategoryLoading by remember { mutableStateOf(false) }
+    var isChartLoading by remember { mutableStateOf(false) }
+    var showOutputSheet by remember { mutableStateOf(false) }
+
+    val mainListState = rememberLazyListState()
+    val carouselState = rememberLazyListState()
+    val artistRowState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
+        AudioOutputManager.init(context)
         val summaryDeferred = async { authRepo.refreshServerStatus() }
-        val vnDeferred = async { musicRepo.getCharts("VN", "trending") }
-        val globalDeferred = async { musicRepo.getCharts("GLOBAL", "trending") }
-        val albumsDeferred = async { musicRepo.getNewReleases("VN") }
+        val vnDeferred = async { musicRepo.getTrending("vn") }
+        val globalDeferred = async { musicRepo.getTrending("global") }
         val artistsDeferred = async { musicRepo.getArtists("all") }
         val nasDeferred = async { musicRepo.getLibraryTracks(false) }
 
         summaryDeferred.await()
-        vnDeferred.await().onSuccess { vnCharts = it }
-        globalDeferred.await().onSuccess { globalCharts = it }
-        albumsDeferred.await().onSuccess { trendingAlbums = it }
+        vnDeferred.await().onSuccess { (tracks, albums) ->
+            if (tracks.isNotEmpty()) vnCharts = tracks
+            if (albums.isNotEmpty()) vnAlbums = albums
+        }
+        globalDeferred.await().onSuccess { (tracks, albums) ->
+            if (tracks.isNotEmpty()) globalCharts = tracks
+            if (albums.isNotEmpty()) globalAlbums = albums
+        }
         artistsDeferred.await().onSuccess { allArtists = it }
         nasDeferred.await().onSuccess { nasTracks = it }
 
-        if (quickPicks.isEmpty()) {
-            quickPicks = (nasTracks.filter { it.isMaxQuality }.take(6) + vnCharts + globalCharts)
-                .distinctBy { it.id }
-                .take(16)
-        }
+        // Ensure cached charts loaded cleanly even if single /api/trending populated both shards
+        if (vnCharts.isEmpty()) vnCharts = musicRepo.getCachedCharts("VN")
+        if (globalCharts.isEmpty()) globalCharts = musicRepo.getCachedCharts("GLOBAL")
+        if (vnAlbums.isEmpty()) vnAlbums = musicRepo.getCachedTrendingAlbums("VN")
+        if (globalAlbums.isEmpty()) globalAlbums = musicRepo.getCachedTrendingAlbums("GLOBAL")
         isLoading = false
     }
 
-    LaunchedEffect(selectedChip) {
-        val chip = HOME_FILTER_CHIPS.find { it.id == selectedChip } ?: return@LaunchedEffect
-        when (chip.id) {
-            "all" -> {
-                val combined = (nasTracks.filter { it.isMaxQuality }.take(6) + vnCharts + globalCharts)
-                    .distinctBy { it.id }
-                    .take(16)
-                if (combined.isNotEmpty()) quickPicks = combined
+    val summary = librarySummary
+    val trendingAlbums = remember(selectedChip, vnAlbums, globalAlbums) {
+        when (selectedChip) {
+            "vpop" -> vnAlbums.ifEmpty { globalAlbums }
+            "global" -> globalAlbums.ifEmpty { vnAlbums }
+            else -> (vnAlbums + globalAlbums).distinctBy { "${it.title.lowercase()}|${it.artist.lowercase()}" }
+        }
+    }
+
+    val hasNasBanner = summary != null && summary.totalTracks > 0
+    val hasAlbumsSection = trendingAlbums.isNotEmpty()
+    val hasRecentSection = recentlyPlayed.isNotEmpty()
+
+    val quickPicks = remember(selectedChip, chipTrackCache.toMap(), vnCharts, globalCharts, nasTracks) {
+        when (selectedChip) {
+            "all", "top_charts" -> (nasTracks.filter { it.isMaxQuality }.take(6) + vnCharts + globalCharts)
+                .distinctBy { it.id }
+                .take(16)
+            "vpop" -> vnCharts.ifEmpty { chipTrackCache["vpop"].orEmpty() }.take(16)
+            "global" -> globalCharts.ifEmpty { chipTrackCache["global"].orEmpty() }.take(16)
+            "nas" -> nasTracks.take(16)
+            "dsd" -> {
+                val localDsd = nasTracks.filter { it.isDsd || (it.format?.contains("DSD", true) == true) }
+                (localDsd + chipTrackCache["dsd"].orEmpty()).distinctBy { it.id }.take(16)
             }
-            "vpop" -> {
-                chartCountry = "VN"
-                if (vnCharts.isNotEmpty()) quickPicks = vnCharts.take(16)
-                else musicRepo.getCharts("VN").onSuccess { quickPicks = it.take(16) }
-            }
-            "nas" -> {
-                if (nasTracks.isNotEmpty()) {
-                    quickPicks = nasTracks.take(16)
-                } else {
-                    musicRepo.getLibraryTracks(true).onSuccess {
-                        nasTracks = it
-                        quickPicks = it.take(16)
-                    }
-                }
+            "dr12" -> {
+                val cached = chipTrackCache["dr12"].orEmpty()
+                val localDr12 = nasTracks.filter { (it.drScore ?: 0) >= 12 }
+                (localDr12.take(6) + vnCharts + globalCharts + cached).distinctBy { it.id }.take(16)
             }
             else -> {
-                chip.query?.let { q ->
-                    musicRepo.search(q).onSuccess { results ->
-                        if (results.isNotEmpty()) quickPicks = results.take(16)
-                    }
+                val cached = chipTrackCache[selectedChip].orEmpty()
+                cached.ifEmpty {
+                    (nasTracks.filter { it.hires }.take(6) + vnCharts + globalCharts)
+                        .distinctBy { it.id }
+                        .take(16)
                 }
             }
         }
@@ -166,24 +197,149 @@ fun HomeScreen(
         when (chartCountry) {
             "VN" -> vnCharts
             "GLOBAL" -> globalCharts
-            "AUDIOPHILE" -> (nasTracks.filter { it.hires } + globalCharts + vnCharts)
+            "AUDIOPHILE" -> (nasTracks.filter { it.isMaxQuality || it.isDsd }.take(10) + globalCharts + vnCharts)
                 .distinctBy { it.id }
-                .take(20)
+                .take(25)
+            "DR12" -> (nasTracks.filter { (it.drScore ?: 0) >= 12 }.take(12) + vnCharts + globalCharts)
+                .distinctBy { it.id }
+                .take(25)
             else -> vnCharts
         }
     }
 
     val filteredArtists = remember(allArtists, artistFilter) {
         when (artistFilter) {
-            "vietnam" -> allArtists.filter { it.category.contains("vietnam", true) || it.categoryLabel.contains("V-Pop", true) }
-            "global" -> allArtists.filter { it.category.contains("global", true) || it.categoryLabel.contains("Global", true) }
+            "vietnam" -> allArtists.filter {
+                it.category.equals("vpop", true) ||
+                    it.category.contains("vietnam", true) ||
+                    it.categoryLabel.contains("V-Pop", true)
+            }
+            "global" -> allArtists.filter {
+                it.category.equals("global", true) ||
+                    it.categoryLabel.contains("Global", true)
+            }
             "audiophile" -> allArtists.filter {
-                it.category.contains("audiophile", true) ||
+                it.category.equals("audiophile", true) ||
                     it.category.contains("instrumental", true) ||
                     it.category.contains("jazz", true)
             }
             else -> allArtists
         }.ifEmpty { allArtists }
+    }
+
+    // Compute exact LazyColumn index of the "Top charts" header item for chip/anchor scrolling
+    val hasArtistsSection = filteredArtists.isNotEmpty()
+    val topChartsItemIndex = 3 +
+        (if (hasNasBanner) 1 else 0) +
+        (if (hasAlbumsSection) 1 else 0) +
+        (if (hasRecentSection) 1 else 0) +
+        (if (hasArtistsSection) 1 else 0)
+
+    fun refreshChartTab(code: String) {
+        chartCountry = code
+        scope.launch {
+            isChartLoading = true
+            when (code) {
+                "VN" -> musicRepo.getCharts("VN", "trending").onSuccess { if (it.isNotEmpty()) vnCharts = it }
+                "GLOBAL" -> musicRepo.getCharts("GLOBAL", "trending").onSuccess { if (it.isNotEmpty()) globalCharts = it }
+                else -> {
+                    if (nasTracks.isEmpty()) {
+                        musicRepo.getLibraryTracks(true).onSuccess { nasTracks = it }
+                    }
+                    if (vnCharts.isEmpty() || globalCharts.isEmpty()) {
+                        musicRepo.getTrending("vn").onSuccess { (t, a) ->
+                            if (t.isNotEmpty()) vnCharts = t
+                            if (a.isNotEmpty()) vnAlbums = a
+                        }
+                        musicRepo.getTrending("global").onSuccess { (t, a) ->
+                            if (t.isNotEmpty()) globalCharts = t
+                            if (a.isNotEmpty()) globalAlbums = a
+                        }
+                    }
+                }
+            }
+            isChartLoading = false
+        }
+    }
+
+    fun selectCategoryChip(chip: HomeFilterChip) {
+        val nextId = if (selectedChip == chip.id && chip.id != "all") "all" else chip.id
+        selectedChip = nextId
+        scope.launch {
+            carouselState.animateScrollToItem(0)
+            when (nextId) {
+                "top_charts" -> {
+                    if (activeChartTracks.isEmpty()) refreshChartTab(chartCountry)
+                    mainListState.animateScrollToItem(topChartsItemIndex)
+                }
+                "vpop" -> {
+                    chartCountry = "VN"
+                    artistFilter = "vietnam"
+                    if (vnCharts.isEmpty()) {
+                        isCategoryLoading = true
+                        musicRepo.getTrending("vn").onSuccess { (t, a) ->
+                            if (t.isNotEmpty()) vnCharts = t
+                            if (a.isNotEmpty()) vnAlbums = a
+                        }
+                        isCategoryLoading = false
+                    }
+                }
+                "global" -> {
+                    chartCountry = "GLOBAL"
+                    artistFilter = "global"
+                    if (globalCharts.isEmpty()) {
+                        isCategoryLoading = true
+                        musicRepo.getTrending("global").onSuccess { (t, a) ->
+                            if (t.isNotEmpty()) globalCharts = t
+                            if (a.isNotEmpty()) globalAlbums = a
+                        }
+                        isCategoryLoading = false
+                    }
+                }
+                "audiophile" -> {
+                    chartCountry = "AUDIOPHILE"
+                    artistFilter = "audiophile"
+                    if (!chipTrackCache.containsKey("audiophile")) {
+                        isCategoryLoading = true
+                        musicRepo.search("audiophile vocal lossless").onSuccess { results ->
+                            if (results.isNotEmpty()) chipTrackCache["audiophile"] = results
+                        }
+                        isCategoryLoading = false
+                    }
+                }
+                "dr12" -> {
+                    chartCountry = "DR12"
+                    if (!chipTrackCache.containsKey("dr12")) {
+                        isCategoryLoading = true
+                        musicRepo.search("audiophile acoustic master").onSuccess { results ->
+                            if (results.isNotEmpty()) chipTrackCache["dr12"] = results
+                        }
+                        isCategoryLoading = false
+                    }
+                }
+                "nas" -> {
+                    if (nasTracks.isEmpty()) {
+                        isCategoryLoading = true
+                        musicRepo.getLibraryTracks(true).onSuccess { nasTracks = it }
+                        isCategoryLoading = false
+                    }
+                }
+                "all" -> {
+                    artistFilter = "all"
+                }
+                else -> {
+                    val targetChip = HOME_FILTER_CHIPS.find { it.id == nextId }
+                    val q = targetChip?.query
+                    if (q != null && !chipTrackCache.containsKey(nextId)) {
+                        isCategoryLoading = true
+                        musicRepo.search(q).onSuccess { results ->
+                            if (results.isNotEmpty()) chipTrackCache[nextId] = results
+                        }
+                        isCategoryLoading = false
+                    }
+                }
+            }
+        }
     }
 
     val horizontalGutter = if (windowState.isWide) 24.dp else 16.dp
@@ -214,25 +370,28 @@ fun HomeScreen(
             contentAlignment = Alignment.TopCenter
         ) {
             LazyColumn(
+                state = mainListState,
                 modifier = Modifier
                     .fillMaxSize()
                     .widthIn(max = MaxContentWidthDp.dp),
                 contentPadding = PaddingValues(bottom = bottomPadding + 28.dp)
             ) {
-                // Top Header Bar
+                // Index 0: Top Header Bar
                 item {
                     KvTidalHomeToolbar(
                         currentUser = currentUser,
                         isServerOnline = isServerOnline,
                         latencyMs = serverLatencyMs,
-                        onCastClick = { showCastDialog = true },
+                        outputBadge = selectedTerminal.shortBadge,
+                        bitPerfectEnabled = bitPerfectEnabled,
+                        onCastClick = { showOutputSheet = true },
                         onSearchClick = onNavigateToSearch,
                         onSettingsClick = onNavigateToSettings,
                         horizontalGutter = horizontalGutter
                     )
                 }
 
-                // Mood & Quality Filter Chips Row
+                // Index 1: Mood & Quality Filter Chips Row
                 item {
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = horizontalGutter, vertical = 10.dp),
@@ -247,7 +406,7 @@ fun HomeScreen(
                                 modifier = Modifier
                                     .height(34.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .clickable { selectedChip = chip.id }
+                                    .clickable { selectCategoryChip(chip) }
                             ) {
                                 Box(
                                     contentAlignment = Alignment.Center,
@@ -263,13 +422,25 @@ fun HomeScreen(
                             }
                         }
                     }
+
+                    if (isCategoryLoading) {
+                        LinearProgressIndicator(
+                            color = TidalCyan,
+                            trackColor = TidalCard,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = horizontalGutter)
+                                .height(2.dp)
+                        )
+                    }
                 }
 
-                // Quick Picks 4-row snap carousel (KV-Music signature section)
+                // Index 2: Quick Picks 4-row snap carousel
                 item {
+                    val activeLabel = HOME_FILTER_CHIPS.find { it.id == selectedChip }?.label ?: "Quick picks"
                     SectionHeader(
-                        eyebrow = "START HI-RES RADIO",
-                        title = "Quick picks",
+                        eyebrow = if (selectedChip == "all") "START HI-RES RADIO" else "${activeLabel.uppercase()} • STUDIO SELECTION",
+                        title = if (selectedChip == "all" || selectedChip == "top_charts") "Quick picks" else "$activeLabel mixes",
                         actionText = if (quickPicks.isNotEmpty()) "Play all" else null,
                         onActionClick = {
                             quickPicks.firstOrNull()?.let { first -> onTrackPlay(first, quickPicks) }
@@ -278,11 +449,10 @@ fun HomeScreen(
                         modifier = Modifier.padding(top = 12.dp, bottom = 10.dp)
                     )
 
-                    if (isLoading && quickPicks.isEmpty()) {
+                    if ((isLoading || isCategoryLoading) && quickPicks.isEmpty()) {
                         HomeLoadingPlaceholder(horizontalPadding = horizontalGutter)
                     } else if (quickPicks.isNotEmpty()) {
                         val pages = remember(quickPicks) { quickPicks.chunked(4) }
-                        val carouselState = rememberLazyListState()
                         val flingBehavior = rememberSnapFlingBehavior(lazyListState = carouselState)
                         val columnWidth = when {
                             windowState.widthDp >= 1000 -> 430.dp
@@ -306,7 +476,8 @@ fun HomeScreen(
                                             track = track,
                                             isLiked = likedIds.contains(track.id),
                                             onTrackClick = { onTrackPlay(track, quickPicks) },
-                                            queue = quickPicks
+                                            queue = quickPicks,
+                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
                                         )
                                     }
                                 }
@@ -315,9 +486,8 @@ fun HomeScreen(
                     }
                 }
 
-                // NAS Lossless Vault Live Banner (if server returned local tracks)
-                val summary = librarySummary
-                if (summary != null && summary.totalTracks > 0) {
+                // Optional Index 3: NAS Lossless Vault Live Banner
+                if (hasNasBanner && summary != null) {
                     item {
                         NasVaultBannerCard(
                             summary = summary,
@@ -330,12 +500,12 @@ fun HomeScreen(
                     }
                 }
 
-                // Hi-Res Albums & Trending Releases Horizontal Carousel
-                if (trendingAlbums.isNotEmpty()) {
+                // Optional Hi-Res Albums & Trending Releases Horizontal Carousel
+                if (hasAlbumsSection) {
                     item {
                         SectionHeader(
                             eyebrow = "LOSSLESS MASTER CATALOG",
-                            title = "Trending albums & releases",
+                            title = if (selectedChip == "global") "Global top albums" else "Trending albums & releases",
                             actionText = "Explore",
                             onActionClick = onNavigateToSearch,
                             horizontalPadding = horizontalGutter,
@@ -358,8 +528,8 @@ fun HomeScreen(
                     }
                 }
 
-                // Listen Again / Recently Played Square Cards
-                if (recentlyPlayed.isNotEmpty()) {
+                // Optional Listen Again / Recently Played Square Cards
+                if (hasRecentSection) {
                     item {
                         SectionHeader(
                             eyebrow = "RECENT SESSION",
@@ -372,6 +542,7 @@ fun HomeScreen(
                             modifier = Modifier.padding(top = 22.dp, bottom = 10.dp)
                         )
 
+                        val cardWidth = if (windowState.isWide) 168.dp else 146.dp
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = horizontalGutter),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -380,15 +551,15 @@ fun HomeScreen(
                                 TrackCardSquare(
                                     track = track,
                                     onClick = { onTrackPlay(track, recentlyPlayed) },
-                                    modifier = Modifier.width(if (windowState.isWide) 168.dp else 146.dp)
+                                    modifier = Modifier.width(cardWidth)
                                 )
                             }
                         }
                     }
                 }
 
-                // Recommended Artists Circular Row with Category Tabs
-                if (filteredArtists.isNotEmpty()) {
+                // Optional Recommended Artists Circular Row with Category Tabs
+                if (hasArtistsSection) {
                     item {
                         SectionHeader(
                             eyebrow = "FEATURED ROSTER",
@@ -418,7 +589,10 @@ fun HomeScreen(
                                     ),
                                     modifier = Modifier
                                         .clip(CircleShape)
-                                        .clickable { artistFilter = key }
+                                        .clickable {
+                                            artistFilter = key
+                                            scope.launch { artistRowState.animateScrollToItem(0) }
+                                        }
                                 ) {
                                     Text(
                                         text = label,
@@ -435,6 +609,7 @@ fun HomeScreen(
 
                         val avatarSize = if (windowState.isWide) 138.dp else 118.dp
                         LazyRow(
+                            state = artistRowState,
                             contentPadding = PaddingValues(horizontal = horizontalGutter),
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
@@ -449,26 +624,100 @@ fun HomeScreen(
                     }
                 }
 
-                // Top Charts Section with Country/Source Pills & 2-Column Tablet Adaptation
+                // Top Charts Section (Anchored at `topChartsItemIndex`)
                 item {
-                    SectionHeader(
-                        eyebrow = "LIVE RANKINGS",
-                        title = "Top charts",
-                        actionText = if (activeChartTracks.isNotEmpty()) "Play chart" else null,
-                        onActionClick = {
-                            activeChartTracks.firstOrNull()?.let { first ->
-                                onTrackPlay(first, activeChartTracks)
-                            }
-                        },
-                        horizontalPadding = horizontalGutter,
-                        modifier = Modifier.padding(top = 26.dp, bottom = 8.dp)
-                    )
-
                     Row(
-                        modifier = Modifier.padding(horizontal = horizontalGutter, vertical = 4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = horizontalGutter,
+                                end = horizontalGutter,
+                                top = 26.dp,
+                                bottom = 8.dp
+                            ),
+                        verticalAlignment = Alignment.Bottom,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "LIVE RANKINGS",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.2.sp,
+                                color = TidalCyanAccent
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = when (chartCountry) {
+                                    "GLOBAL" -> "Global Top 50"
+                                    "AUDIOPHILE" -> "Audiophile MAX Chart"
+                                    "DR12" -> "DR12+ Dynamic Chart"
+                                    else -> "Vietnam Top 50"
+                                },
+                                fontSize = 21.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TidalPureWhite,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        if (activeChartTracks.isNotEmpty()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = TidalWhite08,
+                                    border = BorderStroke(0.8.dp, TidalWhite20),
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            val shuffled = activeChartTracks.shuffled()
+                                            shuffled.firstOrNull()?.let { onTrackPlay(it, shuffled) }
+                                        }
+                                ) {
+                                    Text(
+                                        text = "Shuffle",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = TidalWhite,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                    )
+                                }
+
+                                Surface(
+                                    shape = CircleShape,
+                                    color = TidalCyan,
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            activeChartTracks.firstOrNull()?.let { first ->
+                                                onTrackPlay(first, activeChartTracks)
+                                            }
+                                        }
+                                ) {
+                                    Text(
+                                        text = "Play chart",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TidalPureBlack,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = horizontalGutter, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf("VN" to "Vietnam Top", "GLOBAL" to "Global Top", "AUDIOPHILE" to "Audiophile MAX").forEach { (code, label) ->
+                        val chartTabs = listOf(
+                            "VN" to "Vietnam Top",
+                            "GLOBAL" to "Global Top",
+                            "AUDIOPHILE" to "Audiophile MAX",
+                            "DR12" to "DR12+ Master"
+                        )
+                        items(chartTabs) { (code, label) ->
                             val active = chartCountry == code
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
@@ -476,7 +725,7 @@ fun HomeScreen(
                                 border = BorderStroke(0.8.dp, if (active) TidalPureWhite else TidalWhite15),
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .clickable { chartCountry = code }
+                                    .clickable { refreshChartTab(code) }
                             ) {
                                 Text(
                                     text = label,
@@ -489,11 +738,53 @@ fun HomeScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    if (isChartLoading) {
+                        LinearProgressIndicator(
+                            color = TidalCyan,
+                            trackColor = TidalCard,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = horizontalGutter, vertical = 6.dp)
+                                .height(2.dp)
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
                 }
 
-                val chartDisplay = activeChartTracks.take(20)
-                if (windowState.chartGridColumns == 2 && chartDisplay.size > 1) {
+                val chartDisplay = activeChartTracks.take(25)
+                if (chartDisplay.isEmpty()) {
+                    item {
+                        if (isLoading || isChartLoading) {
+                            HomeLoadingPlaceholder(horizontalPadding = horizontalGutter)
+                        } else {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = TidalCard,
+                                border = BorderStroke(0.8.dp, TidalWhite15),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = horizontalGutter, vertical = 8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Charts unavailable right now",
+                                        fontSize = 13.sp,
+                                        color = TidalGrey04,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = { refreshChartTab(chartCountry) }) {
+                                        Text("Retry", color = TidalCyan, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (windowState.chartGridColumns == 2 && chartDisplay.size > 1) {
                     val pairedRows = chartDisplay.chunked(2)
                     itemsIndexed(pairedRows) { rowIndex, pair ->
                         Row(
@@ -510,7 +801,8 @@ fun HomeScreen(
                                         rankNumber = rank,
                                         isLiked = likedIds.contains(track.id),
                                         onTrackClick = { onTrackPlay(track, chartDisplay) },
-                                        queue = chartDisplay
+                                        queue = chartDisplay,
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
                                     )
                                 }
                             }
@@ -527,7 +819,8 @@ fun HomeScreen(
                                 rankNumber = idx + 1,
                                 isLiked = likedIds.contains(track.id),
                                 onTrackClick = { onTrackPlay(track, chartDisplay) },
-                                queue = chartDisplay
+                                queue = chartDisplay,
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
                             )
                         }
                     }
@@ -536,79 +829,10 @@ fun HomeScreen(
         }
     }
 
-    if (showCastDialog) {
-        AlertDialog(
-            onDismissRequest = { showCastDialog = false },
-            containerColor = TidalGrey13,
-            titleContentColor = TidalPureWhite,
-            textContentColor = TidalGrey04,
-            title = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(YtmIcons.Cast24, contentDescription = null, tint = TidalCyan)
-                    Text("Audio Output & Devices", fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = TidalCyanDim,
-                        border = BorderStroke(1.dp, TidalCyanAccent)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Text(
-                                text = "This Device (Active • ExoPlayer)",
-                                fontWeight = FontWeight.Bold,
-                                color = TidalPureWhite,
-                                fontSize = 14.sp
-                            )
-                            Text(
-                                text = "Mode: ${RetrofitClient.getStreamQualityMode()} • Bit-Perfect FLAC / OPUS Engine",
-                                color = TidalCyan,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = TidalCard,
-                        border = BorderStroke(1.dp, TidalWhite15)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Text(
-                                text = "Synology NAS OpenSubsonic Node",
-                                fontWeight = FontWeight.SemiBold,
-                                color = TidalPureWhite,
-                                fontSize = 14.sp
-                            )
-                            Text(
-                                text = "${RetrofitClient.getBaseUrl()} • ${if (isServerOnline) "Online (${serverLatencyMs ?: 0}ms)" else "Check Settings"}",
-                                color = TidalGrey05,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showCastDialog = false }) {
-                    Text("Close", color = TidalCyan)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        showCastDialog = false
-                        onNavigateToSettings()
-                    }
-                ) {
-                    Text("Audio Settings", color = TidalWhite)
-                }
-            }
+    if (showOutputSheet) {
+        OutputDeviceSheet(
+            musicRepo = musicRepo,
+            onDismiss = { showOutputSheet = false }
         )
     }
 }
@@ -618,6 +842,8 @@ private fun KvTidalHomeToolbar(
     currentUser: User?,
     isServerOnline: Boolean,
     latencyMs: Long?,
+    outputBadge: String,
+    bitPerfectEnabled: Boolean,
     onCastClick: () -> Unit,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
@@ -678,15 +904,38 @@ private fun KvTidalHomeToolbar(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            IconButton(onClick = onCastClick) {
-                Icon(
-                    imageVector = YtmIcons.Cast24,
-                    contentDescription = "Output Devices",
-                    tint = TidalWhite,
-                    modifier = Modifier.size(22.dp)
-                )
+            Surface(
+                shape = CircleShape,
+                color = if (bitPerfectEnabled) TidalEmeraldDim else TidalCyanDim,
+                border = BorderStroke(
+                    0.8.dp,
+                    if (bitPerfectEnabled) TidalEmerald.copy(alpha = 0.55f) else TidalCyanAccent.copy(alpha = 0.55f)
+                ),
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable { onCastClick() }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = YtmIcons.Headset24,
+                        contentDescription = "Output Device",
+                        tint = if (bitPerfectEnabled) TidalEmerald else TidalCyan,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = outputBadge,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (bitPerfectEnabled) TidalEmerald else TidalCyan,
+                        maxLines = 1
+                    )
+                }
             }
             IconButton(onClick = onSearchClick) {
                 Icon(
@@ -696,7 +945,6 @@ private fun KvTidalHomeToolbar(
                     modifier = Modifier.size(22.dp)
                 )
             }
-            Spacer(modifier = Modifier.width(4.dp))
             val initial = currentUser?.name?.firstOrNull()?.uppercaseChar()?.toString() ?: "T"
             Box(
                 modifier = Modifier

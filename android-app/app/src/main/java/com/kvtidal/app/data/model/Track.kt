@@ -10,6 +10,7 @@ data class Track(
     val duration: Int = 0,
     @SerializedName("cover_url") val coverUrl: String = "",
     val url: String = "",
+    @SerializedName("preview_url") val previewUrl: String? = null,
     @SerializedName("stream_id") val streamId: String? = null,
     @SerializedName("file_path") val filePath: String? = null,
     val source: String = "tidal",
@@ -190,7 +191,7 @@ data class TidalTrendingResponse(
     val global: List<TidalTrendingTrack> = emptyList(),
     @SerializedName("vietnam_albums") val vietnamAlbums: List<TidalTrendingAlbum> = emptyList(),
     @SerializedName("global_albums") val globalAlbums: List<TidalTrendingAlbum> = emptyList(),
-    @SerializedName("last_updated") val lastUpdated: Long? = null
+    @SerializedName("last_updated") val lastUpdated: String? = null
 )
 
 data class TidalPopularArtist(
@@ -357,4 +358,33 @@ data class LiveSignalPathInfo(
     val isLossless: Boolean = true,
     val isDsd: Boolean = false,
     val fileName: String? = null
+)
+
+data class TidalServerAudioDevice(
+    val id: String = "",
+    val name: String = "",
+    @SerializedName("hardware_id") val hardwareId: String = "",
+    @SerializedName("device_type") val deviceType: String = "",
+    @SerializedName("is_bit_perfect") val isBitPerfect: Boolean = false,
+    @SerializedName("is_active") val isActive: Boolean = false,
+    @SerializedName("max_sample_rate") val maxSampleRate: Int = 48000,
+    @SerializedName("supported_formats") val supportedFormats: List<String> = emptyList(),
+    val category: String? = null,
+    val description: String? = null
+)
+
+data class TidalServerDeviceTelemetry(
+    @SerializedName("active_device_id") val activeDeviceId: String = "",
+    @SerializedName("active_device_name") val activeDeviceName: String = "",
+    @SerializedName("is_exclusive_bit_perfect") val isExclusiveBitPerfect: Boolean = false,
+    @SerializedName("sample_rate") val sampleRate: Int = 48000,
+    @SerializedName("bit_depth") val bitDepth: Int = 24,
+    @SerializedName("clock_lock") val clockLock: Boolean = true,
+    @SerializedName("hardware_mode") val hardwareMode: String? = null
+)
+
+data class TidalServerDevicesResponse(
+    val devices: List<TidalServerAudioDevice> = emptyList(),
+    @SerializedName("active_device_id") val activeDeviceId: String = "browser",
+    val telemetry: TidalServerDeviceTelemetry? = null
 )

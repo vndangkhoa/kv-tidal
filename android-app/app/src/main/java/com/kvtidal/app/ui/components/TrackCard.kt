@@ -23,6 +23,7 @@ import com.kvtidal.app.KVTidalApp
 import com.kvtidal.app.data.model.Track
 import com.kvtidal.app.player.PlayerManager
 import com.kvtidal.app.ui.theme.*
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 internal fun formatDuration(durationSeconds: Int): String {
@@ -57,9 +58,11 @@ fun TrackListItem(
     onLikeClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     queue: List<Track> = emptyList(),
-    onPlayNext: (() -> Unit)? = null
+    onPlayNext: (() -> Unit)? = null,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val currentTrack by PlayerManager.currentTrack.collectAsState()
     val isPlayerPlaying by PlayerManager.isPlaying.collectAsState()
     val downloadedIds by PlayerManager.downloadedTrackIds.collectAsState()
@@ -100,7 +103,7 @@ fun TrackListItem(
             .fillMaxWidth()
             .defaultMinSize(minHeight = 64.dp)
             .clickable { onTrackClick() }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(contentPadding),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (rankNumber != null) {
@@ -213,15 +216,20 @@ fun TrackListItem(
                 if (onPlayNext != null) {
                     onPlayNext()
                 } else {
-                    val baseQueue = queue.ifEmpty { PlayerManager.queue.value }
-                    val nextQueue = if (baseQueue.isEmpty()) {
-                        listOf(track)
-                    } else {
-                        listOf(track) + baseQueue.filterNot { it.id == track.id }
-                    }
-                    PlayerManager.playTrack(track, nextQueue)
+                    PlayerManager.enqueueNext(context, track)
                 }
                 showMenuSheet = false
+            },
+            onStartRadio = {
+                showMenuSheet = false
+                scope.launch {
+                    Toast.makeText(context, "Building Hi-Res radio for '${track.title}'...", Toast.LENGTH_SHORT).show()
+                    val recs = KVTidalApp.instance.musicRepository
+                        .getRecommendations(track.id, track.artist, track.title)
+                        .getOrDefault(emptyList())
+                    val radioQueue = (listOf(track) + recs).distinctBy { it.id }
+                    PlayerManager.playTrack(track, radioQueue)
+                }
             },
             onToggleLike = toggleLikeAction,
             onToggleDownload = {
@@ -249,6 +257,7 @@ private fun TrackMenuBottomSheet(
     downloadProgress: Float?,
     onDismiss: () -> Unit,
     onPlayNext: () -> Unit,
+    onStartRadio: () -> Unit,
     onToggleLike: () -> Unit,
     onToggleDownload: () -> Unit,
     onQueueToNas: () -> Unit,
@@ -326,6 +335,11 @@ private fun TrackMenuBottomSheet(
                 onClick = onPlayNext
             )
             TrackMenuItem(
+                icon = YtmIcons.RadioLive24,
+                label = "Start Hi-Res radio",
+                onClick = onStartRadio
+            )
+            TrackMenuItem(
                 icon = if (isLiked) YtmIcons.CheckCircle24 else YtmIcons.PlaylistAdd24,
                 label = if (isLiked) "Saved to library" else "Save to library",
                 onClick = {
@@ -391,7 +405,7 @@ private fun TrackMenuItem(
 fun TrackCardSquare(
     track: Track,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier.width(148.dp)
 ) {
     val currentTrack by PlayerManager.currentTrack.collectAsState()
     val isPlayerPlaying by PlayerManager.isPlaying.collectAsState()
@@ -399,13 +413,14 @@ fun TrackCardSquare(
 
     Column(
         modifier = modifier
-            .width(148.dp)
+            .clip(RoundedCornerShape(6.dp))
             .clickable { onClick() }
     ) {
         Box(
             modifier = Modifier
-                .size(148.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(6.dp))
                 .background(TidalSurface),
             contentAlignment = Alignment.Center
         ) {

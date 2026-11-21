@@ -12,6 +12,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.kvtidal.app.data.model.Track
+import com.kvtidal.app.player.AudioOutputManager
 import com.kvtidal.app.player.PlayerManager
 import com.kvtidal.app.ui.adaptive.LocalWindowState
 import com.kvtidal.app.ui.theme.*
@@ -46,6 +48,9 @@ fun MiniPlayer(
 ) {
     val windowState = LocalWindowState.current
     val likedIds by PlayerManager.likedTrackIds.collectAsState()
+    val isBuffering by PlayerManager.isBuffering.collectAsState()
+    val selectedTerminal by AudioOutputManager.selectedTerminal.collectAsState()
+    val bitPerfectEnabled by AudioOutputManager.bitPerfectEnabled.collectAsState()
 
     AnimatedVisibility(
         visible = track != null,
@@ -175,6 +180,11 @@ fun MiniPlayer(
 
                     if (isWide) {
                         QualityBadgePill(
+                            text = "${selectedTerminal.shortBadge} • ${if (bitPerfectEnabled) "BIT-PERFECT" else "GAIN"}",
+                            isMax = selectedTerminal.isBitPerfectCapable && bitPerfectEnabled,
+                            modifier = Modifier.padding(end = 6.dp)
+                        )
+                        QualityBadgePill(
                             text = track.audioSpecLine,
                             isMax = track.isMaxQuality,
                             modifier = Modifier.padding(end = 8.dp)
@@ -209,12 +219,21 @@ fun MiniPlayer(
                             .size(44.dp)
                             .clip(CircleShape)
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) YtmIcons.Pause24 else YtmIcons.Play24,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
-                            tint = TidalCyan,
-                            modifier = Modifier.size(24.dp)
-                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            if (isBuffering) {
+                                CircularProgressIndicator(
+                                    color = TidalCyan,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                            Icon(
+                                imageVector = if (isPlaying) YtmIcons.Pause24 else YtmIcons.Play24,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = TidalCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
 
                     IconButton(

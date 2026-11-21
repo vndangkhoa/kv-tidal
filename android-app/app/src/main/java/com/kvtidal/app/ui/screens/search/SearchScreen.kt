@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -29,6 +30,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -117,8 +119,14 @@ fun SearchScreen(
 
     var preSearch by remember { mutableStateOf<TidalPreSearchResponse?>(null) }
     var newReleaseAlbums by remember { mutableStateOf(musicRepo.getCachedTrendingAlbums("VN")) }
+    var globalReleaseAlbums by remember { mutableStateOf(musicRepo.getCachedTrendingAlbums("GLOBAL")) }
     var popularArtists by remember { mutableStateOf(musicRepo.getCachedArtists("all")) }
-    var fallbackTrendingTracks by remember { mutableStateOf(musicRepo.getCachedCharts("VN")) }
+    var vnChartTracks by remember { mutableStateOf(musicRepo.getCachedCharts("VN")) }
+    var globalChartTracks by remember { mutableStateOf(musicRepo.getCachedCharts("GLOBAL")) }
+    var exploreChartRegion by remember { mutableStateOf("VN") }
+    var isChartLoading by remember { mutableStateOf(false) }
+
+    val exploreListState = rememberLazyListState()
 
     var searchResult by remember { mutableStateOf(UniversalSearchResponse()) }
     var filteredSourceTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
@@ -174,13 +182,22 @@ fun SearchScreen(
 
     LaunchedEffect(Unit) {
         val preDef = async { musicRepo.getPreSearchTrending() }
-        val albDef = async { musicRepo.getNewReleases("VN") }
+        val vnTrendDef = async { musicRepo.getTrending("vn") }
+        val globalTrendDef = async { musicRepo.getTrending("global") }
         val artDef = async { musicRepo.getArtists("all") }
-        val chartDef = async { musicRepo.getCharts("VN") }
         preDef.await().onSuccess { preSearch = it }
-        albDef.await().onSuccess { newReleaseAlbums = it }
+        vnTrendDef.await().onSuccess { (t, a) ->
+            if (t.isNotEmpty()) vnChartTracks = t
+            if (a.isNotEmpty()) newReleaseAlbums = a
+        }
+        globalTrendDef.await().onSuccess { (t, a) ->
+            if (t.isNotEmpty()) globalChartTracks = t
+            if (a.isNotEmpty()) globalReleaseAlbums = a
+        }
         artDef.await().onSuccess { popularArtists = it }
-        chartDef.await().onSuccess { fallbackTrendingTracks = it }
+        if (vnChartTracks.isEmpty()) vnChartTracks = musicRepo.getCachedCharts("VN")
+        if (globalChartTracks.isEmpty()) globalChartTracks = musicRepo.getCachedCharts("GLOBAL")
+        if (newReleaseAlbums.isEmpty()) newReleaseAlbums = musicRepo.getCachedTrendingAlbums("VN")
     }
 
     // Debounced live search as user types
@@ -225,9 +242,21 @@ fun SearchScreen(
         }
     }
 
-    val exploreQuickPicks = remember(preSearch, fallbackTrendingTracks) {
-        val items = preSearch?.quickPicks.orEmpty()
-        if (items.isNotEmpty()) items.map { it.toTrack() } else fallbackTrendingTracks
+    val exploreAlbums = remember(exploreChartRegion, newReleaseAlbums, globalReleaseAlbums) {
+        when (exploreChartRegion) {
+            "GLOBAL" -> globalReleaseAlbums.ifEmpty { newReleaseAlbums }
+            else -> (newReleaseAlbums + globalReleaseAlbums).distinctBy { "${it.title.lowercase()}|${it.artist.lowercase()}" }
+        }
+    }
+
+    val activeExploreChartTracks = remember(exploreChartRegion, vnChartTracks, globalChartTracks, preSearch) {
+        val quick = preSearch?.quickPicks.orEmpty().map { it.toTrack() }
+        when (exploreChartRegion) {
+            "VN" -> vnChartTracks.ifEmpty { quick }
+            "GLOBAL" -> globalChartTracks.ifEmpty { quick }
+            "HIRES" -> (quick + vnChartTracks + globalChartTracks).distinctBy { it.id }.take(25)
+            else -> vnChartTracks.ifEmpty { quick }
+        }
     }
 
     val exploreArtists = remember(preSearch, popularArtists) {
@@ -410,15 +439,74 @@ fun SearchScreen(
 
         if (query.isBlank()) {
             // EXPLORE STATE
+            val trendingTerms = preSearch?.trendingKeywords.orEmpty()
+            val hasTermsItem = searchHistory.isNotEmpty() || trendingTerms.isNotEmpty()
+            val hasReleasesItem = exploreAlbums.isNotEmpty()
+            val moodRows = TIDAL_MOOD_GENRES.chunked(windowState.moodGridColumns)
+
+            // Exact LazyColumn indices for quick navigation buttons
+            val newReleasesIdx = 1 + (if (hasTermsItem) 1 else 0)
+            val moodsIdx = newReleasesIdx + (if (hasReleasesItem) 1 else 0)
+            val chartsIdx = moodsIdx + 1 + moodRows.size + (if (exploreArtists.isNotEmpty()) 1 else 0)
+
             LazyColumn(
+                state = exploreListState,
                 modifier = Modifier
                     .fillMaxSize()
                     .widthIn(max = MaxContentWidthDp.dp),
                 contentPadding = PaddingValues(bottom = bottomPadding + 28.dp)
             ) {
+                // Quick Explore Navigation Buttons (New releases / Top charts / Moods & genres)
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = horizontalGutter, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ExploreQuickNavButton(
+                            label = "New releases",
+                            icon = YtmIcons.Album24,
+                            onClick = {
+                                scope.launch {
+                                    exploreListState.animateScrollToItem(newReleasesIdx.coerceAtLeast(0))
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        ExploreQuickNavButton(
+                            label = "Top charts",
+                            icon = YtmIcons.Spark24,
+                            onClick = {
+                                scope.launch {
+                                    if (activeExploreChartTracks.isEmpty()) {
+                                        isChartLoading = true
+                                        musicRepo.getTrending("vn").onSuccess { (t, a) ->
+                                            if (t.isNotEmpty()) vnChartTracks = t
+                                            if (a.isNotEmpty()) newReleaseAlbums = a
+                                        }
+                                        isChartLoading = false
+                                    }
+                                    exploreListState.animateScrollToItem(chartsIdx.coerceAtLeast(0))
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        ExploreQuickNavButton(
+                            label = "Moods & genres",
+                            icon = YtmIcons.Mix24,
+                            onClick = {
+                                scope.launch {
+                                    exploreListState.animateScrollToItem(moodsIdx.coerceAtLeast(0))
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
                 // Recent Searches & Trending Keywords
-                val trendingTerms = preSearch?.trendingKeywords.orEmpty()
-                if (searchHistory.isNotEmpty() || trendingTerms.isNotEmpty()) {
+                if (hasTermsItem) {
                     item {
                         Column(modifier = Modifier.padding(top = 6.dp, bottom = 12.dp)) {
                             if (searchHistory.isNotEmpty()) {
@@ -492,7 +580,7 @@ fun SearchScreen(
                 }
 
                 // New Releases Horizontal Row
-                if (newReleaseAlbums.isNotEmpty()) {
+                if (hasReleasesItem) {
                     item {
                         Text(
                             text = "New Hi-Res releases",
@@ -509,7 +597,7 @@ fun SearchScreen(
                             contentPadding = PaddingValues(horizontal = horizontalGutter),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            items(newReleaseAlbums, key = { "exp_alb_${it.id}_${it.title}" }) { album ->
+                            items(exploreAlbums, key = { "exp_alb_${it.id}_${it.title}" }) { album ->
                                 Column(
                                     modifier = Modifier
                                         .width(cardSize)
@@ -574,7 +662,6 @@ fun SearchScreen(
                     )
                 }
 
-                val moodRows = TIDAL_MOOD_GENRES.chunked(windowState.moodGridColumns)
                 items(moodRows) { rowItems ->
                     Row(
                         modifier = Modifier
@@ -680,47 +767,123 @@ fun SearchScreen(
                     }
                 }
 
-                // Trending Tracks
-                if (exploreQuickPicks.isNotEmpty()) {
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    start = horizontalGutter,
-                                    end = horizontalGutter,
-                                    top = 24.dp,
-                                    bottom = 8.dp
-                                ),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                // Top Charts Section in Explore
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = horizontalGutter,
+                                end = horizontalGutter,
+                                top = 24.dp,
+                                bottom = 8.dp
+                            ),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
                             Text(
-                                text = "Trending Hi-Res tracks",
+                                text = "TOP CHARTS",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                color = TidalCyanAccent
+                            )
+                            Text(
+                                text = when (exploreChartRegion) {
+                                    "GLOBAL" -> "Global Top 50"
+                                    "HIRES" -> "Hi-Res Trending"
+                                    else -> "Vietnam Top 50"
+                                },
                                 fontSize = 19.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = TidalPureWhite
                             )
-                            Text(
-                                text = "Play all",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
+                        }
+                        if (activeExploreChartTracks.isNotEmpty()) {
+                            Surface(
+                                shape = CircleShape,
                                 color = TidalCyan,
-                                modifier = Modifier.clickable {
-                                    exploreQuickPicks.firstOrNull()?.let { first ->
-                                        onTrackPlay(first, exploreQuickPicks)
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        activeExploreChartTracks.firstOrNull()?.let { first ->
+                                            onTrackPlay(first, activeExploreChartTracks)
+                                        }
                                     }
-                                }
-                            )
+                            ) {
+                                Text(
+                                    text = "Play chart",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TidalPureBlack,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                )
+                            }
                         }
                     }
 
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = horizontalGutter, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(listOf("VN" to "Vietnam Top", "GLOBAL" to "Global Top", "HIRES" to "Hi-Res MAX")) { (code, label) ->
+                            val selected = exploreChartRegion == code
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (selected) TidalPureWhite else TidalCard,
+                                border = BorderStroke(0.8.dp, if (selected) TidalPureWhite else TidalWhite15),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        exploreChartRegion = code
+                                        scope.launch {
+                                            isChartLoading = true
+                                            musicRepo.getTrending(code.lowercase()).onSuccess { (t, a) ->
+                                                if (code == "GLOBAL") {
+                                                    if (t.isNotEmpty()) globalChartTracks = t
+                                                    if (a.isNotEmpty()) globalReleaseAlbums = a
+                                                } else {
+                                                    if (t.isNotEmpty()) vnChartTracks = t
+                                                    if (a.isNotEmpty()) newReleaseAlbums = a
+                                                }
+                                            }
+                                            isChartLoading = false
+                                        }
+                                    }
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (selected) TidalPureBlack else TidalGrey04,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (isChartLoading) {
+                        LinearProgressIndicator(
+                            color = TidalCyan,
+                            trackColor = TidalCard,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = horizontalGutter, vertical = 6.dp)
+                                .height(2.dp)
+                        )
+                    }
+                }
+
+                if (activeExploreChartTracks.isNotEmpty()) {
                     AdaptiveTrackGridItems(
-                        tracks = exploreQuickPicks.take(20),
+                        tracks = activeExploreChartTracks.take(25),
                         columns = windowState.libraryGridColumns,
                         likedIds = likedIds,
                         horizontalGutter = horizontalGutter,
-                        onTrackClick = { t -> onTrackPlay(t, exploreQuickPicks) }
+                        ranked = true,
+                        keyPrefix = "exp_${exploreChartRegion}",
+                        onTrackClick = { t -> onTrackPlay(t, activeExploreChartTracks) }
                     )
                 }
             }
@@ -977,6 +1140,48 @@ fun SearchScreen(
 }
 
 @Composable
+private fun ExploreQuickNavButton(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = TidalCard,
+        border = BorderStroke(0.8.dp, TidalWhite15),
+        modifier = modifier
+            .height(54.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = TidalCyan,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = TidalPureWhite,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
 private fun KeywordPill(
     text: String,
     isAccent: Boolean,
@@ -1009,14 +1214,17 @@ private fun androidx.compose.foundation.lazy.LazyListScope.AdaptiveTrackGridItem
     columns: Int,
     likedIds: Set<String>,
     horizontalGutter: Dp,
+    ranked: Boolean = false,
+    keyPrefix: String = "sr",
     onTrackClick: (Track) -> Unit
 ) {
     if (columns <= 1) {
-        items(tracks.size, key = { idx -> "s_${idx}_${tracks[idx].id}" }) { idx ->
+        items(tracks.size, key = { idx -> "${keyPrefix}_${idx}_${tracks[idx].id}" }) { idx ->
             val track = tracks[idx]
             Box(modifier = Modifier.padding(horizontal = (horizontalGutter - 16.dp).coerceAtLeast(0.dp))) {
                 TrackListItem(
                     track = track,
+                    rankNumber = if (ranked) idx + 1 else null,
                     isLiked = likedIds.contains(track.id),
                     onTrackClick = { onTrackClick(track) },
                     queue = tracks
@@ -1025,7 +1233,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.AdaptiveTrackGridItem
         }
     } else {
         val paired = tracks.chunked(2)
-        items(paired.size, key = { r -> "sg_${r}_${paired[r].first().id}" }) { rowIdx ->
+        items(paired.size, key = { r -> "${keyPrefix}_g_${r}_${paired[r].first().id}" }) { rowIdx ->
             val pair = paired[rowIdx]
             Row(
                 modifier = Modifier
@@ -1033,10 +1241,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.AdaptiveTrackGridItem
                     .padding(horizontal = (horizontalGutter - 16.dp).coerceAtLeast(0.dp)),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                pair.forEach { track ->
+                pair.forEachIndexed { colIdx, track ->
+                    val rank = rowIdx * 2 + colIdx + 1
                     Box(modifier = Modifier.weight(1f)) {
                         TrackListItem(
                             track = track,
+                            rankNumber = if (ranked) rank else null,
                             isLiked = likedIds.contains(track.id),
                             onTrackClick = { onTrackClick(track) },
                             queue = tracks
@@ -1064,7 +1274,8 @@ private fun TidalSearchItem.toTrack(): Track {
         album = album,
         duration = duration,
         coverUrl = RetrofitClient.resolveCoverUrl(coverUrl),
-        url = previewUrl?.let { RetrofitClient.resolveCoverUrl(it) }.orEmpty(),
+        url = "",
+        previewUrl = previewUrl?.let { RetrofitClient.resolveCoverUrl(it) },
         streamId = streamId,
         source = source,
         hires = hires,

@@ -19,8 +19,10 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,8 +49,12 @@ import com.kvtidal.app.data.model.LiveSignalPathInfo
 import com.kvtidal.app.data.model.SyncedLyricsResponse
 import com.kvtidal.app.data.model.Track
 import com.kvtidal.app.data.repository.MusicRepository
+import com.kvtidal.app.player.AudioOutputManager
+import com.kvtidal.app.player.GainStage
+import com.kvtidal.app.player.OutputTerminal
 import com.kvtidal.app.player.PlayerManager
 import com.kvtidal.app.ui.adaptive.LocalWindowState
+import com.kvtidal.app.ui.components.OutputDeviceSheet
 import com.kvtidal.app.ui.components.QualityBadgePill
 import com.kvtidal.app.ui.components.TrackListItem
 import com.kvtidal.app.ui.components.YtmIcons
@@ -79,6 +85,7 @@ fun FullPlayerScreen(
 
     val currentTrack by PlayerManager.currentTrack.collectAsState()
     val isPlaying by PlayerManager.isPlaying.collectAsState()
+    val isBuffering by PlayerManager.isBuffering.collectAsState()
     val positionMs by PlayerManager.currentPosition.collectAsState()
     val durationMs by PlayerManager.duration.collectAsState()
     val queue by PlayerManager.queue.collectAsState()
@@ -92,6 +99,10 @@ fun FullPlayerScreen(
     val liveSignalPath by PlayerManager.liveSignalPath.collectAsState()
     val lastLoadLatencyMs by PlayerManager.lastLoadLatencyMs.collectAsState()
     val lastLoadSource by PlayerManager.lastLoadSource.collectAsState()
+    val selectedTerminal by AudioOutputManager.selectedTerminal.collectAsState()
+    val bitPerfectEnabled by AudioOutputManager.bitPerfectEnabled.collectAsState()
+    val selectedGain by AudioOutputManager.selectedGain.collectAsState()
+    val activeHardwareSummary by AudioOutputManager.activeHardwareSummary.collectAsState()
 
     val track = currentTrack ?: return
 
@@ -99,6 +110,7 @@ fun FullPlayerScreen(
     var activeTab by remember { mutableStateOf(PlayerInspectorTab.UP_NEXT) }
     var showCompactInspectorSheet by remember { mutableStateOf(false) }
     var showSignalPathSheet by remember { mutableStateOf(false) }
+    var showOutputSheet by remember { mutableStateOf(false) }
     var showPlaylistPicker by remember { mutableStateOf(false) }
 
     var lyricsData by remember(track.id) { mutableStateOf<SyncedLyricsResponse?>(null) }
@@ -305,6 +317,7 @@ fun FullPlayerScreen(
                             )
                             PlayerTransportRow(
                                 isPlaying = isPlaying,
+                                isBuffering = isBuffering,
                                 isShuffle = isShuffle,
                                 isRepeat = isRepeat,
                                 playButtonSize = 62.dp,
@@ -316,9 +329,11 @@ fun FullPlayerScreen(
                             )
                             PlayerActionsCarousel(
                                 track = track,
+                                outputBadge = selectedTerminal.shortBadge,
                                 isLiked = isLiked,
                                 isDownloaded = isDownloaded,
                                 downloadProgress = dlProg,
+                                onOutputClick = { showOutputSheet = true },
                                 onLike = { PlayerManager.toggleLike(track.id) },
                                 onDislike = {
                                     Toast.makeText(context, "Skipped track", Toast.LENGTH_SHORT).show()
@@ -350,6 +365,11 @@ fun FullPlayerScreen(
                             isLoadingRelated = isLoadingRelated,
                             liveSignalPath = liveSignalPath,
                             latencyMs = lastLoadLatencyMs,
+                            selectedTerminal = selectedTerminal,
+                            selectedGain = selectedGain,
+                            bitPerfectEnabled = bitPerfectEnabled,
+                            activeHardwareSummary = activeHardwareSummary,
+                            onOpenOutputSheet = { showOutputSheet = true },
                             onSeekToMs = { PlayerManager.seekTo(it) },
                             onSelectQueueTrack = { t -> PlayerManager.playTrack(t, queue) },
                             onSelectRelatedTrack = { t ->
@@ -375,14 +395,16 @@ fun FullPlayerScreen(
                         Column(
                             modifier = Modifier
                                 .weight(0.47f)
-                                .fillMaxHeight(),
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState()),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.SpaceBetween
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .weight(1f, fill = false)
                                     .fillMaxWidth()
+                                    .heightIn(min = 160.dp, max = 360.dp)
                                     .padding(vertical = 8.dp),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -409,9 +431,11 @@ fun FullPlayerScreen(
 
                             PlayerActionsCarousel(
                                 track = track,
+                                outputBadge = selectedTerminal.shortBadge,
                                 isLiked = isLiked,
                                 isDownloaded = isDownloaded,
                                 downloadProgress = dlProg,
+                                onOutputClick = { showOutputSheet = true },
                                 onLike = { PlayerManager.toggleLike(track.id) },
                                 onDislike = {
                                     Toast.makeText(context, "Skipped track", Toast.LENGTH_SHORT).show()
@@ -447,6 +471,7 @@ fun FullPlayerScreen(
 
                             PlayerTransportRow(
                                 isPlaying = isPlaying,
+                                isBuffering = isBuffering,
                                 isShuffle = isShuffle,
                                 isRepeat = isRepeat,
                                 playButtonSize = 68.dp,
@@ -472,6 +497,11 @@ fun FullPlayerScreen(
                             isLoadingRelated = isLoadingRelated,
                             liveSignalPath = liveSignalPath,
                             latencyMs = lastLoadLatencyMs,
+                            selectedTerminal = selectedTerminal,
+                            selectedGain = selectedGain,
+                            bitPerfectEnabled = bitPerfectEnabled,
+                            activeHardwareSummary = activeHardwareSummary,
+                            onOpenOutputSheet = { showOutputSheet = true },
                             onSeekToMs = { PlayerManager.seekTo(it) },
                             onSelectQueueTrack = { t -> PlayerManager.playTrack(t, queue) },
                             onSelectRelatedTrack = { t ->
@@ -524,9 +554,11 @@ fun FullPlayerScreen(
 
                         PlayerActionsCarousel(
                             track = track,
+                            outputBadge = selectedTerminal.shortBadge,
                             isLiked = isLiked,
                             isDownloaded = isDownloaded,
                             downloadProgress = dlProg,
+                            onOutputClick = { showOutputSheet = true },
                             onLike = { PlayerManager.toggleLike(track.id) },
                             onDislike = {
                                 Toast.makeText(context, "Skipped track", Toast.LENGTH_SHORT).show()
@@ -567,6 +599,7 @@ fun FullPlayerScreen(
 
                         PlayerTransportRow(
                             isPlaying = isPlaying,
+                            isBuffering = isBuffering,
                             isShuffle = isShuffle,
                             isRepeat = isRepeat,
                             playButtonSize = 72.dp,
@@ -648,6 +681,14 @@ fun FullPlayerScreen(
                     isLoadingRelated = isLoadingRelated,
                     liveSignalPath = liveSignalPath,
                     latencyMs = lastLoadLatencyMs,
+                    selectedTerminal = selectedTerminal,
+                    selectedGain = selectedGain,
+                    bitPerfectEnabled = bitPerfectEnabled,
+                    activeHardwareSummary = activeHardwareSummary,
+                    onOpenOutputSheet = {
+                        showCompactInspectorSheet = false
+                        showOutputSheet = true
+                    },
                     onSeekToMs = { PlayerManager.seekTo(it) },
                     onSelectQueueTrack = { t -> PlayerManager.playTrack(t, queue) },
                     onSelectRelatedTrack = { t ->
@@ -671,12 +712,27 @@ fun FullPlayerScreen(
                 track = track,
                 signalPath = liveSignalPath,
                 latencyMs = lastLoadLatencyMs,
+                selectedTerminal = selectedTerminal,
+                selectedGain = selectedGain,
+                bitPerfectEnabled = bitPerfectEnabled,
+                activeHardwareSummary = activeHardwareSummary,
+                onOpenOutputSheet = {
+                    showSignalPathSheet = false
+                    showOutputSheet = true
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 12.dp)
                     .padding(bottom = 24.dp)
             )
         }
+    }
+
+    if (showOutputSheet) {
+        OutputDeviceSheet(
+            musicRepo = musicRepo,
+            onDismiss = { showOutputSheet = false }
+        )
     }
 
     // Save to Playlist Sheet
@@ -954,9 +1010,11 @@ private fun TrackMetaSection(
 @Composable
 private fun PlayerActionsCarousel(
     track: Track,
+    outputBadge: String,
     isLiked: Boolean,
     isDownloaded: Boolean,
     downloadProgress: Float?,
+    onOutputClick: () -> Unit,
     onLike: () -> Unit,
     onDislike: () -> Unit,
     onLyrics: () -> Unit,
@@ -970,6 +1028,14 @@ private fun PlayerActionsCarousel(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        item {
+            ActionPillButton(
+                label = outputBadge,
+                icon = YtmIcons.Headset24,
+                highlighted = true,
+                onClick = onOutputClick
+            )
+        }
         item {
             ActionPillButton(
                 label = if (isLiked) "Liked" else "Like",
@@ -1136,6 +1202,7 @@ private fun PlayerSeekSection(
 @Composable
 private fun PlayerTransportRow(
     isPlaying: Boolean,
+    isBuffering: Boolean,
     isShuffle: Boolean,
     isRepeat: Boolean,
     playButtonSize: Dp,
@@ -1175,6 +1242,13 @@ private fun PlayerTransportRow(
                 .clickable { onTogglePlay() }
         ) {
             Box(contentAlignment = Alignment.Center) {
+                if (isBuffering) {
+                    CircularProgressIndicator(
+                        color = TidalPureBlack,
+                        strokeWidth = 2.5.dp,
+                        modifier = Modifier.size(playButtonSize - 10.dp)
+                    )
+                }
                 Icon(
                     imageVector = if (isPlaying) YtmIcons.Pause36 else YtmIcons.Play36,
                     contentDescription = if (isPlaying) "Pause" else "Play",
@@ -1217,6 +1291,11 @@ private fun PlayerInspectorPanel(
     isLoadingRelated: Boolean,
     liveSignalPath: LiveSignalPathInfo?,
     latencyMs: Long?,
+    selectedTerminal: OutputTerminal,
+    selectedGain: GainStage,
+    bitPerfectEnabled: Boolean,
+    activeHardwareSummary: String,
+    onOpenOutputSheet: () -> Unit,
     onSeekToMs: (Long) -> Unit,
     onSelectQueueTrack: (Track) -> Unit,
     onSelectRelatedTrack: (Track) -> Unit,
@@ -1335,6 +1414,11 @@ private fun PlayerInspectorPanel(
                         track = track,
                         signalPath = liveSignalPath,
                         latencyMs = latencyMs,
+                        selectedTerminal = selectedTerminal,
+                        selectedGain = selectedGain,
+                        bitPerfectEnabled = bitPerfectEnabled,
+                        activeHardwareSummary = activeHardwareSummary,
+                        onOpenOutputSheet = onOpenOutputSheet,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(18.dp)
@@ -1415,6 +1499,11 @@ private fun SignalPathInspectorContent(
     track: Track,
     signalPath: LiveSignalPathInfo?,
     latencyMs: Long?,
+    selectedTerminal: OutputTerminal,
+    selectedGain: GainStage,
+    bitPerfectEnabled: Boolean,
+    activeHardwareSummary: String,
+    onOpenOutputSheet: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val fmt = (signalPath?.format ?: track.format ?: "FLAC").uppercase()
@@ -1425,7 +1514,7 @@ private fun SignalPathInspectorContent(
     val isDsd = signalPath?.isDsd ?: track.isDsd
 
     Column(
-        modifier = modifier,
+        modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Row(
@@ -1457,15 +1546,35 @@ private fun SignalPathInspectorContent(
             accent = TidalCyan
         )
         SignalStageCard(
-            stage = "3. DSP Processing",
-            detail = "None (Bit-Perfect Passthrough • ReplayGain Neutral)",
+            stage = "3. DSP & Volume Stage",
+            detail = if (bitPerfectEnabled || selectedTerminal == OutputTerminal.LINE_OUT_LO) {
+                "Bit-Perfect 32-bit Float • 0.0 dBFS Unity • Zero Playback Scaling"
+            } else {
+                "32-bit Float Engine • Gain Stage: ${selectedGain.label} (${selectedGain.vrmsLabel})"
+            },
             accent = TidalEmerald
         )
         SignalStageCard(
-            stage = "4. Output Stage",
-            detail = "Android Media3 AudioTrack Mixer -> Device DAC",
+            stage = "4. Output Terminal & DAC",
+            detail = "${selectedTerminal.title} • ${selectedTerminal.voltageSpec}\nRoute: $activeHardwareSummary",
             accent = TidalCyanAccent
         )
+
+        Button(
+            onClick = onOpenOutputSheet,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = TidalCyan,
+                contentColor = TidalPureBlack
+            ),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Switch Output / DAC / LO / 3.5mm / 4.4mm",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
+            )
+        }
     }
 }
 
