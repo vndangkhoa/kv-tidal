@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="tidal_black">#000000</color>
+    <color name="tidal_obsidian">#050505</color>
+    <color name="tidal_grey_13">#0D1117</color>
+    <color name="tidal_surface">#121212</color>
+    <color name="tidal_card">#181818</color>
+    <color name="tidal_card_hover">#22262C</color>
+    <color name="tidal_cyan">#00FFFF</color>
+    <color name="tidal_cyan_accent">#06B6D4</color>
+    <color name="tidal_max_gold">#E5A00D</color>
+    <color name="tidal_emerald">#10B981</color>
+    <color name="tidal_white">#FFFFFE</color>
+    <color name="tidal_white_67">#AAFFFFFF</color>
+</resources>

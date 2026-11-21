@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KV Tidal</string>
+    <string name="app_tagline">Hi-Res Lossless Audio Streaming</string>
+    <string name="search_hint">Search tracks, albums, artists, Hi-Res FLAC</string>
+    <string name="audio_video_switcher_song">Audio</string>
+    <string name="audio_video_switcher_video">Spectrum</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_explore">Explore</string>
+    <string name="nav_library">Library</string>
+    <string name="nav_settings">Settings</string>
+</resources>

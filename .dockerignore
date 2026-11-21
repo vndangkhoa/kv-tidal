@@ -21,6 +21,7 @@ dist/
 *.spk
 *.apk
 mobile/
+android-app/
 spk/*
 !spk/bin/
 spk/bin/*
