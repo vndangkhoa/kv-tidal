@@ -38,7 +38,9 @@ fun OutputDeviceSheet(
     val scope = rememberCoroutineScope()
 
     val selectedTerminal by AudioOutputManager.selectedTerminal.collectAsState()
+    val effectiveTerminal by AudioOutputManager.effectiveTerminal.collectAsState()
     val bitPerfectEnabled by AudioOutputManager.bitPerfectEnabled.collectAsState()
+    val isBluetoothSafeActive by AudioOutputManager.isBluetoothSafePcmActive.collectAsState()
     val selectedGain by AudioOutputManager.selectedGain.collectAsState()
     val detectedSinks by AudioOutputManager.detectedHardwareDevices.collectAsState()
     val activeSummary by AudioOutputManager.activeHardwareSummary.collectAsState()
@@ -151,13 +153,21 @@ fun OutputDeviceSheet(
                                     color = TidalPureWhite
                                 )
                                 QualityBadgePill(
-                                    text = if (bitPerfectEnabled) "ACTIVE" else "DSP",
-                                    isMax = !bitPerfectEnabled
+                                    text = when {
+                                        isBluetoothSafeActive -> "BT SAFE"
+                                        bitPerfectEnabled -> "ACTIVE"
+                                        else -> "DSP"
+                                    },
+                                    isMax = !bitPerfectEnabled || isBluetoothSafeActive
                                 )
                             }
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
-                                text = "32-bit Float ExoPlayer AudioSink • 0.0 dBFS unity gain • Bypasses pitch/speed resampler",
+                                text = if (isBluetoothSafeActive) {
+                                    "Bluetooth A2DP Safe Mode: 16-bit Integer PCM • -1.4 dB True-Peak Headroom • SCO & Spatializer bypassed (32-bit Float auto-resumes on wired DAC)"
+                                } else {
+                                    "32-bit Float ExoPlayer AudioSink • 0.0 dBFS unity gain • Bypasses pitch/speed resampler"
+                                },
                                 fontSize = 11.sp,
                                 color = TidalGrey04
                             )
@@ -228,7 +238,10 @@ fun OutputDeviceSheet(
 
             // Output Gain Stage / Voltage Selector
             item {
-                val unityLocked = selectedTerminal == OutputTerminal.LINE_OUT_LO || bitPerfectEnabled
+                val unityLocked = !isBluetoothSafeActive && (
+                    effectiveTerminal == OutputTerminal.LINE_OUT_LO ||
+                        (bitPerfectEnabled && effectiveTerminal.isBitPerfectCapable)
+                    )
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -243,7 +256,12 @@ fun OutputDeviceSheet(
                             color = TidalGrey04
                         )
                         Text(
-                            text = if (unityLocked) "LOCKED 0.0 dBFS UNITY" else selectedGain.vrmsLabel,
+                            text = when {
+                                isBluetoothSafeActive && bitPerfectEnabled -> "-1.4 dB BT SAFE"
+                                isBluetoothSafeActive -> "${selectedGain.vrmsLabel} (BT CAPPED)"
+                                unityLocked -> "LOCKED 0.0 dBFS UNITY"
+                                else -> selectedGain.vrmsLabel
+                            },
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (unityLocked) TidalEmerald else TidalCyan

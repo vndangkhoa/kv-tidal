@@ -4,9 +4,12 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -17,11 +20,25 @@ class PlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var boundPlayer: Player? = null
+
+    private val servicePlayerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) acquireWakeLock() else releaseWakeLock()
+            startForegroundNotification()
+        }
+
+        override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+            startForegroundNotification()
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         createNotificationChannel()
         val player = PlayerManager.getExoPlayer(this)
+        boundPlayer = player
 
         try {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -73,17 +90,21 @@ class PlaybackService : MediaSessionService() {
 
         setMediaNotificationProvider(notificationProvider)
 
-        player.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) acquireWakeLock() else releaseWakeLock()
-                startForegroundNotification()
-            }
+        player.addListener(servicePlayerListener)
 
-            override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
-                startForegroundNotification()
-            }
-        })
+        startForegroundNotification()
+    }
 
+    private fun rebindPlayer(newPlayer: ExoPlayer) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            Handler(Looper.getMainLooper()).post { rebindPlayer(newPlayer) }
+            return
+        }
+        if (boundPlayer === newPlayer) return
+        boundPlayer?.removeListener(servicePlayerListener)
+        boundPlayer = newPlayer
+        newPlayer.addListener(servicePlayerListener)
+        mediaSession?.setPlayer(newPlayer)
         startForegroundNotification()
     }
 
@@ -204,6 +225,11 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
+        boundPlayer?.removeListener(servicePlayerListener)
+        boundPlayer = null
         releaseWakeLock()
         mediaSession?.run {
             player.release()
@@ -214,6 +240,13 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
+        @Volatile
+        private var activeInstance: PlaybackService? = null
+
+        fun onPlayerRebuilt(newPlayer: ExoPlayer) {
+            activeInstance?.rebindPlayer(newPlayer)
+        }
+
         const val CHANNEL_ID = "kv_tidal_playback_channel"
         const val NOTIFICATION_ID = 2001
 

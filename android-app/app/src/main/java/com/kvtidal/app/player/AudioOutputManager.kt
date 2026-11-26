@@ -119,13 +119,91 @@ data class DetectedAudioSink(
     val deviceInfo: AudioDeviceInfo? = null
 )
 
+const val BLUETOOTH_HEADROOM_GAIN = 0.85f
+
+fun isVoiceOnlyOutputDevice(deviceType: Int): Boolean =
+    deviceType == AudioDeviceInfo.TYPE_TELEPHONY ||
+        deviceType == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE ||
+        deviceType == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+
+fun isBluetoothMusicDeviceType(deviceType: Int): Boolean =
+    deviceType == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+        deviceType == 23 /* TYPE_HEARING_AID */ ||
+        deviceType == 26 /* TYPE_BLE_HEADSET */ ||
+        deviceType == 27 /* TYPE_BLE_SPEAKER */
+
+private fun isWiredBitPerfectTerminal(terminal: OutputTerminal): Boolean = when (terminal) {
+    OutputTerminal.USB_DAC,
+    OutputTerminal.BALANCED_4_4MM,
+    OutputTerminal.SINGLE_ENDED_3_5MM,
+    OutputTerminal.LINE_OUT_LO,
+    OutputTerminal.COAX_OPTICAL -> true
+    else -> false
+}
+
+fun resolveEffectiveOutputTerminal(
+    selectedTerminal: OutputTerminal,
+    detectedSinks: List<DetectedAudioSink>
+): OutputTerminal {
+    if (selectedTerminal == OutputTerminal.AUTO_DAC) {
+        val wiredPriority = listOf(
+            OutputTerminal.USB_DAC,
+            OutputTerminal.BALANCED_4_4MM,
+            OutputTerminal.SINGLE_ENDED_3_5MM,
+            OutputTerminal.LINE_OUT_LO,
+            OutputTerminal.COAX_OPTICAL
+        )
+        for (candidate in wiredPriority) {
+            if (detectedSinks.any { it.mappedTerminal == candidate }) {
+                return candidate
+            }
+        }
+        if (detectedSinks.any { it.mappedTerminal == OutputTerminal.BLUETOOTH_HIRES }) {
+            return OutputTerminal.BLUETOOTH_HIRES
+        }
+        return OutputTerminal.INTERNAL_SPEAKER
+    }
+    if (selectedTerminal == OutputTerminal.BLUETOOTH_HIRES ||
+        selectedTerminal == OutputTerminal.INTERNAL_SPEAKER
+    ) {
+        return selectedTerminal
+    }
+    if (isWiredBitPerfectTerminal(selectedTerminal)) {
+        val hasAnyWiredSink = detectedSinks.any { isWiredBitPerfectTerminal(it.mappedTerminal) }
+        if (hasAnyWiredSink) {
+            return selectedTerminal
+        }
+        if (detectedSinks.any { it.mappedTerminal == OutputTerminal.BLUETOOTH_HIRES }) {
+            return OutputTerminal.BLUETOOTH_HIRES
+        }
+    }
+    return selectedTerminal
+}
+
+fun shouldEnableFloatPcmOutput(
+    selectedTerminal: OutputTerminal,
+    detectedSinks: List<DetectedAudioSink>,
+    bitPerfectEnabled: Boolean
+): Boolean {
+    if (!bitPerfectEnabled) return false
+    val effective = resolveEffectiveOutputTerminal(selectedTerminal, detectedSinks)
+    return effective.isBitPerfectCapable && effective != OutputTerminal.AUTO_DAC
+}
+
 fun resolveEffectiveVolumeMultiplier(
     terminal: OutputTerminal,
     gain: GainStage,
-    bitPerfectEnabled: Boolean
+    bitPerfectEnabled: Boolean,
+    effectiveTerminal: OutputTerminal = terminal
 ): Float {
+    if (effectiveTerminal == OutputTerminal.BLUETOOTH_HIRES) {
+        return if (bitPerfectEnabled) BLUETOOTH_HEADROOM_GAIN
+        else minOf(gain.volumeMultiplier, BLUETOOTH_HEADROOM_GAIN)
+    }
     // Line-Out and Bit-Perfect digital passthrough lock digital volume at 1.0 (0.0 dBFS unity)
-    if (terminal == OutputTerminal.LINE_OUT_LO || bitPerfectEnabled) {
+    if (effectiveTerminal == OutputTerminal.LINE_OUT_LO ||
+        (bitPerfectEnabled && effectiveTerminal.isBitPerfectCapable)
+    ) {
         return 1.0f
     }
     return gain.volumeMultiplier
@@ -160,7 +238,6 @@ fun mapAndroidDeviceTypeToTerminal(
             else -> OutputTerminal.SINGLE_ENDED_3_5MM
         }
         AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
         23 /* TYPE_HEARING_AID */,
         26 /* TYPE_BLE_HEADSET */,
         27 /* TYPE_BLE_SPEAKER */ -> OutputTerminal.BLUETOOTH_HIRES
@@ -199,6 +276,15 @@ object AudioOutputManager {
 
     private val _selectedServerDeviceId = MutableStateFlow("browser")
     val selectedServerDeviceId: StateFlow<String> = _selectedServerDeviceId
+
+    private val _effectiveTerminal = MutableStateFlow(OutputTerminal.AUTO_DAC)
+    val effectiveTerminal: StateFlow<OutputTerminal> = _effectiveTerminal
+
+    private val _isBluetoothSafePcmActive = MutableStateFlow(false)
+    val isBluetoothSafePcmActive: StateFlow<Boolean> = _isBluetoothSafePcmActive
+
+    private val _isFloatPcmActive = MutableStateFlow(false)
+    val isFloatPcmActive: StateFlow<Boolean> = _isFloatPcmActive
 
     private val deviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
@@ -247,10 +333,7 @@ object AudioOutputManager {
         }.getOrDefault(emptyList())
 
         val mapped = rawDevices
-            .filter {
-                it.type != AudioDeviceInfo.TYPE_TELEPHONY &&
-                    it.type != AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
-            }
+            .filter { !isVoiceOnlyOutputDevice(it.type) }
             .map { dev ->
                 val pName = dev.productName?.toString()?.trim().orEmpty().ifBlank { friendlyTypeName(dev.type) }
                 val terminal = mapAndroidDeviceTypeToTerminal(dev.type, pName)
@@ -306,18 +389,31 @@ object AudioOutputManager {
         prefs?.edit()?.putString(KEY_SERVER_DEVICE, deviceId)?.apply()
     }
 
+    private fun findPreferredBluetoothSink(sinks: List<DetectedAudioSink>): DetectedAudioSink? {
+        val btSinks = sinks.filter { it.mappedTerminal == OutputTerminal.BLUETOOTH_HIRES }
+        if (btSinks.isEmpty()) return null
+        return btSinks.firstOrNull { it.deviceType == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+            ?: btSinks.firstOrNull { it.deviceType == 26 /* TYPE_BLE_HEADSET */ }
+            ?: btSinks.firstOrNull { it.deviceType == 27 /* TYPE_BLE_SPEAKER */ }
+            ?: btSinks.firstOrNull { it.deviceType == 23 /* TYPE_HEARING_AID */ }
+    }
+
+    private fun findPreferredWiredSink(sinks: List<DetectedAudioSink>): DetectedAudioSink? {
+        return sinks.firstOrNull { it.mappedTerminal == OutputTerminal.USB_DAC }
+            ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.BALANCED_4_4MM }
+            ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.SINGLE_ENDED_3_5MM }
+            ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.LINE_OUT_LO }
+            ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.COAX_OPTICAL }
+    }
+
     fun resolvePreferredAudioDevice(): AudioDeviceInfo? {
         val sinks = _detectedHardwareDevices.value
         if (sinks.isEmpty()) return null
         val target = _selectedTerminal.value
         return when (target) {
             OutputTerminal.AUTO_DAC -> {
-                sinks.firstOrNull { it.mappedTerminal == OutputTerminal.USB_DAC }?.deviceInfo
-                    ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.BALANCED_4_4MM }?.deviceInfo
-                    ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.SINGLE_ENDED_3_5MM }?.deviceInfo
-                    ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.LINE_OUT_LO }?.deviceInfo
-                    ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.COAX_OPTICAL }?.deviceInfo
-                    ?: sinks.firstOrNull { it.mappedTerminal == OutputTerminal.BLUETOOTH_HIRES }?.deviceInfo
+                findPreferredWiredSink(sinks)?.deviceInfo
+                    ?: findPreferredBluetoothSink(sinks)?.deviceInfo
             }
             OutputTerminal.USB_DAC -> sinks.firstOrNull { it.mappedTerminal == OutputTerminal.USB_DAC }?.deviceInfo
             OutputTerminal.BALANCED_4_4MM -> {
@@ -339,28 +435,75 @@ object AudioOutputManager {
                     }?.deviceInfo
             }
             OutputTerminal.COAX_OPTICAL -> sinks.firstOrNull { it.mappedTerminal == OutputTerminal.COAX_OPTICAL }?.deviceInfo
-            OutputTerminal.BLUETOOTH_HIRES -> sinks.firstOrNull { it.mappedTerminal == OutputTerminal.BLUETOOTH_HIRES }?.deviceInfo
+            OutputTerminal.BLUETOOTH_HIRES -> findPreferredBluetoothSink(sinks)?.deviceInfo
             OutputTerminal.INTERNAL_SPEAKER -> sinks.firstOrNull { it.mappedTerminal == OutputTerminal.INTERNAL_SPEAKER }?.deviceInfo
         }
     }
 
-    fun effectiveVolume(): Float = resolveEffectiveVolumeMultiplier(
-        terminal = _selectedTerminal.value,
-        gain = _selectedGain.value,
+    /**
+     * Returns preferred AudioDeviceInfo for ExoPlayer.setPreferredAudioDevice().
+     * In AUTO_DAC mode when Bluetooth/Speaker is active, returns null so Android's
+     * native A2DP/LE-Audio stack handles codec & transport routing without interference.
+     */
+    fun resolvePreferredAudioDeviceForRouting(): AudioDeviceInfo? {
+        val sinks = _detectedHardwareDevices.value
+        if (sinks.isEmpty()) return null
+        return when (_selectedTerminal.value) {
+            OutputTerminal.AUTO_DAC -> findPreferredWiredSink(sinks)?.deviceInfo
+            OutputTerminal.BLUETOOTH_HIRES -> findPreferredBluetoothSink(sinks)?.deviceInfo
+            else -> resolvePreferredAudioDevice()
+        }
+    }
+
+    fun shouldUseFloatPcmOutput(): Boolean = shouldEnableFloatPcmOutput(
+        selectedTerminal = _selectedTerminal.value,
+        detectedSinks = _detectedHardwareDevices.value,
         bitPerfectEnabled = _bitPerfectEnabled.value
     )
 
+    fun effectiveVolume(): Float {
+        val effective = resolveEffectiveOutputTerminal(_selectedTerminal.value, _detectedHardwareDevices.value)
+        return resolveEffectiveVolumeMultiplier(
+            terminal = _selectedTerminal.value,
+            gain = _selectedGain.value,
+            bitPerfectEnabled = _bitPerfectEnabled.value,
+            effectiveTerminal = effective
+        )
+    }
+
     private fun updateSummary() {
         val term = _selectedTerminal.value
+        val sinks = _detectedHardwareDevices.value
+        val effective = resolveEffectiveOutputTerminal(term, sinks)
+        val useFloat = shouldEnableFloatPcmOutput(term, sinks, _bitPerfectEnabled.value)
+        val isBtSafe = effective == OutputTerminal.BLUETOOTH_HIRES
+
+        _effectiveTerminal.value = effective
+        _isFloatPcmActive.value = useFloat
+        _isBluetoothSafePcmActive.value = isBtSafe
+
         val matchedSink = resolvePreferredAudioDevice()
         val sinkName = matchedSink?.productName?.toString()?.takeIf { it.isNotBlank() }
         val maxRate = matchedSink?.sampleRates?.maxOrNull()?.let { "${it / 1000}kHz" }
-        val mode = if (_bitPerfectEnabled.value) "Bit-Perfect 32-bit Float" else _selectedGain.value.vrmsLabel
-        _activeHardwareSummary.value = buildString {
-            append(term.shortBadge)
-            if (sinkName != null) append(" • $sinkName")
-            if (maxRate != null) append(" ($maxRate)")
-            append(" • $mode")
+        _activeHardwareSummary.value = when {
+            isBtSafe -> buildString {
+                append("BT A2DP")
+                if (sinkName != null) append(" • $sinkName")
+                if (maxRate != null) append(" ($maxRate)")
+                append(" • 16-bit Safe PCM (-1.4 dB Headroom)")
+            }
+            useFloat -> buildString {
+                append(term.shortBadge)
+                if (sinkName != null) append(" • $sinkName")
+                if (maxRate != null) append(" ($maxRate)")
+                append(" • Bit-Perfect 32-bit Float")
+            }
+            else -> buildString {
+                append(term.shortBadge)
+                if (sinkName != null) append(" • $sinkName")
+                if (maxRate != null) append(" ($maxRate)")
+                append(" • Safe Int PCM • ${_selectedGain.value.vrmsLabel}")
+            }
         }
     }
 

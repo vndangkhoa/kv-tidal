@@ -1512,6 +1512,7 @@ private fun SignalPathInspectorContent(
     val dr = signalPath?.drScore ?: track.drScore
     val src = signalPath?.source ?: track.source
     val isDsd = signalPath?.isDsd ?: track.isDsd
+    val isBluetoothSafeActive by AudioOutputManager.isBluetoothSafePcmActive.collectAsState()
 
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
@@ -1547,10 +1548,13 @@ private fun SignalPathInspectorContent(
         )
         SignalStageCard(
             stage = "3. DSP & Volume Stage",
-            detail = if (bitPerfectEnabled || selectedTerminal == OutputTerminal.LINE_OUT_LO) {
-                "Bit-Perfect 32-bit Float • 0.0 dBFS Unity • Zero Playback Scaling"
-            } else {
-                "32-bit Float Engine • Gain Stage: ${selectedGain.label} (${selectedGain.vrmsLabel})"
+            detail = when {
+                isBluetoothSafeActive ->
+                    "Bluetooth A2DP Safe 16-bit Integer PCM • -1.4 dB True-Peak Headroom • Spatializer Off • Zero SCO/Float Distortion"
+                bitPerfectEnabled || selectedTerminal == OutputTerminal.LINE_OUT_LO ->
+                    "Bit-Perfect 32-bit Float • 0.0 dBFS Unity • Zero Playback Scaling"
+                else ->
+                    "32-bit Float Engine • Gain Stage: ${selectedGain.label} (${selectedGain.vrmsLabel})"
             },
             accent = TidalEmerald
         )
