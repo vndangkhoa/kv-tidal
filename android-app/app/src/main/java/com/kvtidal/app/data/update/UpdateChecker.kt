@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 data class AppUpdateInfo(
@@ -20,6 +21,7 @@ object UpdateChecker {
     private const val REPO = "kv-tidal"
     private const val PKG_PAGE = "https://syno.vndns.net/package/kvtidal"
     private const val DIRECT_APK = "https://syno.vndns.net/kvtidal-release.apk"
+    private const val VERSION_JSON_URL = "https://syno.vndns.net/kvtidal-version.json"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -27,9 +29,44 @@ object UpdateChecker {
         .build()
 
     suspend fun fetchLatest(): AppUpdateInfo? = withContext(Dispatchers.IO) {
-        fetchFrom("https://api.github.com/repos/$OWNER/$REPO/releases?per_page=10")
+        fetchFromVersionJson(VERSION_JSON_URL)
+            ?: fetchFrom("https://api.github.com/repos/$OWNER/$REPO/releases?per_page=10")
             ?: fetchFrom("https://git.khoavo.vndns.net/api/v1/repos/$OWNER/$REPO/releases?limit=10")
             ?: fetchFrom("https://git.khoavo.myds.me/api/v1/repos/$OWNER/$REPO/releases?limit=10")
+    }
+
+    private fun fetchFromVersionJson(url: String): AppUpdateInfo? {
+        return try {
+            val req = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val obj = JSONObject(resp.body?.string() ?: return null)
+                val version = obj.optString("version").trim()
+                val rawTag = obj.optString("tag").trim()
+                val tag = rawTag.ifEmpty {
+                    if (version.isNotEmpty()) {
+                        if (version.startsWith("v", ignoreCase = true)) version else "v$version"
+                    } else {
+                        return null
+                    }
+                }
+                val apkUrl = obj.optString("apkUrl").trim().ifEmpty {
+                    obj.optString("latestApkUrl").trim().ifEmpty { DIRECT_APK }
+                }
+                AppUpdateInfo(
+                    tag = tag,
+                    name = obj.optString("name").trim().ifEmpty { "KV Tidal $tag" },
+                    notes = obj.optString("notes").trim(),
+                    apkUrl = apkUrl,
+                    pageUrl = obj.optString("releasePageUrl").trim().ifEmpty { PKG_PAGE }
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun fetchFrom(url: String): AppUpdateInfo? {

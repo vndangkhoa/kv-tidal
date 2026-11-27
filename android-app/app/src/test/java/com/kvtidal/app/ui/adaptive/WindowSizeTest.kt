@@ -1,6 +1,7 @@
 package com.kvtidal.app.ui.adaptive
 
 import android.media.AudioDeviceInfo
+import com.kvtidal.app.data.update.UpdateChecker
 import com.kvtidal.app.player.BLUETOOTH_HEADROOM_GAIN
 import com.kvtidal.app.player.DetectedAudioSink
 import com.kvtidal.app.player.GainStage
@@ -247,5 +248,12 @@ class WindowSizeTest {
             ),
             0.0001f
         )
+    }
+
+    @Test
+    fun updateCheckerDetectsNewerSemanticVersionTags() {
+        assertTrue(UpdateChecker.isNewer("v1.0.1", "1.0.0"))
+        assertTrue(UpdateChecker.isNewer("android-v1.0.1", "1.0.0"))
+        assertFalse(UpdateChecker.isNewer("v1.0.1", "1.0.1"))
     }
 }

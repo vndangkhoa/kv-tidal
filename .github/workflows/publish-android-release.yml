@@ -1,0 +1,52 @@
+name: Publish Android Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download signed APK and verify SHA256
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA=$(awk 'NR==1 {print $1}' android-app/release-sha256.txt | tr -d '[:space:]')
+          if [ -z "$EXPECTED_SHA" ]; then
+            echo "Missing expected SHA256 in android-app/release-sha256.txt"
+            exit 1
+          fi
+          VERSIONED_APK="kvtidal-${TAG}.apk"
+          curl -fsSL --retry 3 "https://syno.vndns.net/${VERSIONED_APK}" -o "${VERSIONED_APK}"
+          ACTUAL_SHA=$(sha256sum "${VERSIONED_APK}" | awk '{print $1}')
+          echo "Expected SHA256: $EXPECTED_SHA"
+          echo "Actual SHA256:   $ACTUAL_SHA"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "SHA256 mismatch for ${VERSIONED_APK}!"
+            exit 1
+          fi
+          cp "${VERSIONED_APK}" kvtidal-release.apk
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSIONED_APK="kvtidal-${TAG}.apk"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$VERSIONED_APK" kvtidal-release.apk --clobber
+          else
+            gh release create "$TAG" "$VERSIONED_APK" kvtidal-release.apk \
+              --title "KV Tidal Android ${TAG}" \
+              --notes-file android-app/RELEASE_NOTES.md
+          fi
